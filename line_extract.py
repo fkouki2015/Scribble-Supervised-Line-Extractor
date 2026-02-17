@@ -59,107 +59,166 @@ class UNet(nn.Module):
 
         return self.out(y1) # logits
 
-        
+
 # -----------------------------
 # Utilities
 # -----------------------------
-def read_bgr(path):
-    img = cv2.imread(path, cv2.IMREAD_COLOR)
+def load_image(path, color_mode=cv2.IMREAD_COLOR):
+    '''
+    path: path to image
+    return: image in BGR format
+    '''
+    img = cv2.imread(path, color_mode)
     if img is None:
         raise FileNotFoundError(f"Cannot read: {path}")
     return img
 
-def resize_to_max(img, max_side=1024):
+def resize_to_max(img, max_size=1024):
+    '''
+    img: image in BGR format
+    max_size: maximum size
+    return: resized image and scale factor
+    '''
     h, w = img.shape[:2]
     s = max(h, w)
-    if s <= max_side:
+    if s <= max_size:
         return img, 1.0
-    scale = max_side / s
+    scale = max_size / s
     new_w = int(round(w * scale))
     new_h = int(round(h * scale))
     out = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
     return out, scale
 
-def make_scribble_label_mask(scribble_bgr, use_black_bg=False, black_thr=10):
-    """
-    Returns mask with:
-      1 for line-labeled pixels
-      0 for bg-labeled pixels
-     -1 for unknown
-    We treat:
-      white-ish pixels as line
-      black-ish pixels as background (only when use_black_bg=True)
-      others as unknown
-    """
-    b, g, r = cv2.split(scribble_bgr)
 
-    line = (r > 250) & (g > 250) & (b > 250)
-    bg = (r < black_thr) & (g < black_thr) & (b < black_thr)
-
-    mask = np.full(scribble_bgr.shape[:2], -1, dtype=np.int8)
-    mask[line] = 1
-    if use_black_bg:
-        mask[bg] = 0
-    return mask
-
-def compute_edge_map(gray):
-    # Edge map used to encourage line probability at edges, but not required
-    # Normalize to [0,1]
-    g = cv2.GaussianBlur(gray, (0, 0), 1.0)
+def compute_edge_map(gray_img):
+    '''
+    Compute edge map from grayscale image.
+    '''
+    g = cv2.GaussianBlur(gray_img, (0, 0), 1.0)
     gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
     mag = cv2.magnitude(gx, gy)
     mag = mag / (mag.max() + 1e-6)
     return mag
 
-def extract_line_pixels_in_scribble(gray, pos_scr, edge_map, adaptive_block=31, adaptive_c=8, edge_thr=0.08):
+def make_scribble_label_mask(scr_bgr):
     """
-    Refine positive scribble labels by keeping only likely line pixels inside scribble.
-    This makes thick scribbles robust by suppressing non-line interior pixels.
+    Returns mask with:
+      1 for line-labeled pixels
+     -1 for unknown
     """
-    block = int(max(3, adaptive_block))
-    if block % 2 == 0:
-        block += 1
+    b, g, r = cv2.split(scr_bgr)
 
-    # Dark-line prior (for typical line-art) from local adaptive threshold.
-    dark_line = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, block, adaptive_c
-    ) > 0
+    line = (r > 250) & (g > 250) & (b > 250)
 
-    # Edge prior from Canny + Sobel magnitude.
-    canny = cv2.Canny(gray, 40, 120) > 0
-    edge_like = canny | (edge_map >= float(edge_thr))
+    mask = np.full(scr_bgr.shape[:2], -1, dtype=np.int8)
+    mask[line] = 1
+    return mask
 
-    refined = pos_scr & dark_line & edge_like
+import numpy as np
+import cv2
 
-    # If refinement is too aggressive, fallback to the original positive scribble.
+def extract_line_pixels_in_scribble(img, pos_scr):
+    """
+    Robustly keep likely line pixels inside a positive scribble mask.
+    - Works for color images and colored strokes.
+    - Few/no tunable hyperparameters: thresholds are data-driven (Otsu).
+    Returns:
+        refined_mask (bool): refined pixels inside pos_scr
+    """
+
+    pos_scr = pos_scr.astype(bool)
     orig_count = int(pos_scr.sum())
-    refined_count = int(refined.sum())
     if orig_count == 0:
         return pos_scr, 1.0
-    keep_ratio = refined_count / max(orig_count, 1)
-    if refined_count < 16 or keep_ratio < 0.02:
-        return pos_scr, 1.0
-    return refined, keep_ratio
 
-def apply_clahe_bgr(img_bgr, clip_limit=2.0, tile_grid=8):
+    # --- 1) Edge strength robust to color: Lab gradients (L,a,b) ---
+    if img.ndim == 2:
+        # grayscale input
+        lab = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        lab = cv2.cvtColor(lab, cv2.COLOR_BGR2LAB)
+    else:
+        if img.shape[2] == 4:
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        else:
+            img_bgr = img
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+
+    lab_f = lab.astype(np.float32) / 255.0
+    # Scharr is a strong, stable gradient operator in OpenCV
+    mags = []
+    for ch in range(3):
+        gx = cv2.Scharr(lab_f[:, :, ch], cv2.CV_32F, 1, 0)
+        gy = cv2.Scharr(lab_f[:, :, ch], cv2.CV_32F, 0, 1)
+        mag = cv2.magnitude(gx, gy)
+        mags.append(mag)
+    edge_mag = np.maximum(np.maximum(mags[0], mags[1]), mags[2])  # channel-robust
+
+    # Normalize edge_mag inside scribble to 0..255 for Otsu
+    vals = edge_mag[pos_scr]
+    if vals.size < 32:
+        return pos_scr, 1.0
+
+    vmin = float(vals.min())
+    vmax = float(vals.max())
+    if vmax - vmin < 1e-6:
+        return pos_scr, 1.0
+
+    edge_norm = (edge_mag - vmin) / (vmax - vmin)
+    edge_u8 = np.clip(edge_norm * 255.0, 0, 255).astype(np.uint8)
+
+    # --- 2) Otsu threshold computed ONLY from scribble pixels ---
+    # We run Otsu on the 1D distribution but need a 2D array. Make a tiny image.
+    # Equivalent to applying Otsu to vals.
+    vals_u8 = edge_u8[pos_scr].reshape(-1, 1)
+    # Otsu threshold
+    thr, _ = cv2.threshold(vals_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Apply threshold back to full image inside scribble
+    edge_keep = (edge_u8 >= thr) & pos_scr
+
+    # --- 3) Suppress "interior" of thick scribbles using distance-transform ridge ---
+    # Ridge ~ local maxima of distance transform -> near scribble centerline
+    scr_u8 = pos_scr.astype(np.uint8)
+    dist = cv2.distanceTransform(scr_u8, cv2.DIST_L2, 3)
+    # local maxima: dist == dilate(dist)
+    dist_dil = cv2.dilate(dist, np.ones((3, 3), np.uint8))
+    ridge = (dist >= dist_dil - 1e-6) & pos_scr
+
+    # Allow a tiny thickness around ridge to avoid being overly thin
+    ridge_u8 = ridge.astype(np.uint8)
+    ridge_band = cv2.dilate(ridge_u8, np.ones((3, 3), np.uint8)).astype(bool)
+
+    refined = edge_keep & ridge_band
+
+    # --- 4) Remove tiny speckles (fixed safe constant) ---
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(refined.astype(np.uint8), connectivity=8)
+    cleaned = np.zeros_like(refined, dtype=bool)
+    for cid in range(1, num):
+        area = int(stats[cid, cv2.CC_STAT_AREA])
+        if area >= 8:  # small constant; usually safe across resolutions
+            cleaned[labels == cid] = True
+
+    return cleaned
+
+
+def apply_clahe_bgr(image, clip_limit=2.0, tile_grid=8):
     """
     Contrast normalization on luminance while preserving color.
     """
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_grid, tile_grid))
     l2 = clahe.apply(l)
     lab2 = cv2.merge([l2, a, b])
     return cv2.cvtColor(lab2, cv2.COLOR_LAB2BGR)
 
-def normalize_image01(img_rgb01):
+def normalize_image(img_rgb):
     """
     Simple channel-wise normalization for training stability.
     """
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-    return (img_rgb01 - mean) / std
+    return (img_rgb - mean) / std
 
 def random_augment(x, t, m, e, p=0.8):
     """
@@ -263,11 +322,14 @@ def binarize_and_thin(mask01):
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--img", required=True)
-    ap.add_argument("--scribble", required=True)
+    ap.add_argument("--img", default="images/img_1.jpg")
+    ap.add_argument("--scribble", default="images/scr_2.jpg")
     ap.add_argument("--out", default="line_on_white.png")
-    ap.add_argument("--out_mask", default=None, help="Optional path to save the final binary mask.")
-    ap.add_argument("--max_side", type=int, default=5000)
+    ap.add_argument("--out_mask", default="mask.png")
+    ap.add_argument("--out_pos_scr_refined", default="scribble.png", help="Optional path to save an overlay visualizing refined positive scribble pixels.")
+    ap.add_argument("--out_prob", default="prob.png", help="Optional path to save the probability map as an 8-bit grayscale image.")
+    ap.add_argument("--out_prob_npy", default="", help="Optional path to save the probability map as float32 .npy.")
+    ap.add_argument("--max_size", type=int, default=5000)
     ap.add_argument("--iters", type=int, default=1200)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--base_ch", type=int, default=32)
@@ -304,40 +366,36 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
-    img_bgr = read_bgr(args.img)
-    orig_img_bgr = img_bgr.copy()
+    img_bgr = load_image(args.img)
+    orig_image = img_bgr.copy()
     orig_h, orig_w = img_bgr.shape[:2]
-    scr_bgr = read_bgr(args.scribble)
+    scr_bgr = load_image(args.scribble)
 
-    # Resize consistently (important for training speed)
-    img_bgr, _ = resize_to_max(img_bgr, args.max_side)
+    # resize
+    img_bgr, _ = resize_to_max(img_bgr, args.max_size)
     scr_bgr = cv2.resize(scr_bgr, (img_bgr.shape[1], img_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
     if args.use_clahe:
         img_bgr = apply_clahe_bgr(img_bgr, clip_limit=args.clahe_clip, tile_grid=args.clahe_grid)
 
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    img_rgb = normalize_image01(img_rgb)
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    img_rgb = normalize_image(img_rgb)
+    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
     # Create partial labels: 1=line, 0=bg, -1=unknown
-    scr_mask = make_scribble_label_mask(
-        scr_bgr, use_black_bg=args.use_bg_scribble, black_thr=args.bg_scribble_black_thr
-    )
-    pos_scr = scr_mask == 1
-    neg_scr = scr_mask == 0
+    scr_mask = make_scribble_label_mask(scr_bgr)
+    pos_scr = scr_mask == 1 # line scribble
+    neg_scr = scr_mask == 0 # bg scribble
 
-    # Refine positive scribble so only line pixels inside scribble become positive labels.
-    # This makes thick scribbles less noisy for supervision.
-    edge = compute_edge_map(gray)
-    pos_scr_refined, keep_ratio = extract_line_pixels_in_scribble(
-        gray,
+    # extract line pixels in scribble
+    edge = compute_edge_map(img_gray)
+    pos_scr_refined = extract_line_pixels_in_scribble(
+        img_gray,
         pos_scr,
-        edge,
-        adaptive_block=args.scribble_line_adaptive_block,
-        adaptive_c=args.scribble_line_adaptive_c,
-        edge_thr=args.scribble_line_edge_thr,
     )
     pos_scr = pos_scr_refined
+    mask_u8 = (pos_scr_refined.astype(np.uint8) * 255)
+    cv2.imwrite(args.out_pos_scr_refined, mask_u8)
+
 
     # Auto-generate background samples from a ring around line scribble
     # This stabilizes training hugely without user needing to mark BG.
@@ -345,15 +403,18 @@ def main():
     kernel = np.ones((7, 7), np.uint8)
     dil = cv2.dilate(pos_scr.astype(np.uint8), kernel, iterations=2)
     ring = (dil == 1) & (~pos_scr)
+    cv2.imwrite("ring.png", (ring * 255).astype(np.uint8))
 
     # Use a conservative BG: ring pixels with low gradient are likely non-line interior
     bg_auto = ring & (edge < args.bg_edge_thr)
+    cv2.imwrite("bg_auto.png", (bg_auto * 255).astype(np.uint8))
+    
     bg = neg_scr | bg_auto
 
     # Build target + labeled mask
     # target: 1 for line scribble, 0 for bg scribble/bg auto, else unused
-    target = np.zeros_like(gray, dtype=np.float32)
-    labeled = np.zeros_like(gray, dtype=np.float32)
+    target = np.zeros_like(img_gray, dtype=np.float32)
+    labeled = np.zeros_like(img_gray, dtype=np.float32)
     target[pos_scr] = 1.0
     labeled[pos_scr] = 1.0
     target[bg] = 0.0
@@ -394,7 +455,6 @@ def main():
         f"[INFO] pos_weight={pos_weight:.3f} | pos_scribble={int(pos_scr.sum())} "
         f"| bg_scribble={int(neg_scr.sum())} | bg_edge_thr={args.bg_edge_thr:.3f}"
     )
-    print(f"[INFO] scribble_line_keep_ratio={keep_ratio:.3f}")
 
     model.train()
     best_loss = float("inf")
@@ -451,6 +511,16 @@ def main():
         logits = model(x)
         prob = torch.sigmoid(logits).squeeze().cpu().numpy()
 
+    # Optionally save raw probability map (before thresholding/postprocess).
+    prob_out = prob
+    if prob_out.shape[:2] != (orig_h, orig_w):
+        prob_out = cv2.resize(prob_out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+    if args.out_prob:
+        prob_u8 = np.clip(prob_out * 255.0, 0, 255).astype(np.uint8)
+        cv2.imwrite(args.out_prob, prob_u8)
+    if args.out_prob_npy:
+        np.save(args.out_prob_npy, prob_out.astype(np.float32))
+
     # Threshold -> binary
     if args.thr_method == "none":
         bin01 = prob.astype(np.uint8) * 255
@@ -492,9 +562,9 @@ def main():
 
     # Apply mask to original image over a white background.
     # mask=255 -> keep original pixel, mask=0 -> white.
-    out_img = np.full_like(orig_img_bgr, 255, dtype=np.uint8)
+    out_img = np.full_like(orig_image, 255, dtype=np.uint8)
     keep = thinned > 0
-    out_img[keep] = orig_img_bgr[keep]
+    out_img[keep] = orig_image[keep]
 
     cv2.imwrite(args.out, out_img)
     if args.out_mask:
