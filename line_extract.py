@@ -1,4 +1,5 @@
 import argparse
+import os
 import cv2
 import numpy as np
 import torch
@@ -110,95 +111,93 @@ def make_scribble_label_mask(scr_bgr):
     b, g, r = cv2.split(scr_bgr)
 
     line = (r > 250) & (g > 250) & (b > 250)
-
+    bg = (r >250) & (g < 5) & (b < 5)
     mask = np.full(scr_bgr.shape[:2], -1, dtype=np.int8)
     mask[line] = 1
+    mask[bg] = 0
     return mask
 
 import numpy as np
 import cv2
 
-def extract_line_pixels_in_scribble(img, pos_scr):
+def _xmeans(X, max_k=6):
     """
-    Robustly keep likely line pixels inside a positive scribble mask.
-    - Works for color images and colored strokes.
-    - Few/no tunable hyperparameters: thresholds are data-driven (Otsu).
-    Returns:
-        refined_mask (bool): refined pixels inside pos_scr
+    多次元データに対するX-means（BIC基準でクラスタ数を自動決定）．
+    X: float32 の (N, D) numpy array
+    return: (cluster_labels, cluster_centers)  centers: (k, D)
     """
+    from sklearn.cluster import KMeans
 
-    pos_scr = pos_scr.astype(bool)
-    orig_count = int(pos_scr.sum())
-    if orig_count == 0:
-        return pos_scr, 1.0
+    def bic(km, X):
+        n, d = X.shape
+        k = km.n_clusters
+        lbl = km.labels_
+        var = sum(
+            np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2)
+            for i in range(k)
+        ) / max(n - k, 1)
+        var = max(var, 1e-6)
+        log_lik = sum(
+            len(X[lbl == i]) * (
+                np.log(len(X[lbl == i]) / n + 1e-9)
+                - 0.5 * d * np.log(2 * np.pi * var)
+                - 0.5 * np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2) / var
+            )
+            for i in range(k)
+        )
+        n_params = k * d + k - 1
+        return -2 * log_lik + n_params * np.log(n)
 
-    # --- 1) Edge strength robust to color: Lab gradients (L,a,b) ---
-    if img.ndim == 2:
-        # grayscale input
-        lab = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        lab = cv2.cvtColor(lab, cv2.COLOR_BGR2LAB)
-    else:
-        if img.shape[2] == 4:
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        else:
-            img_bgr = img
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    X = X.astype(np.float32)
+    best_bic = np.inf
+    best_km = None
+    for k in range(2, min(max_k + 1, len(X))):
+        try:
+            km = KMeans(n_clusters=k, n_init=3, random_state=0).fit(X)
+            b = bic(km, X)
+            if b < best_bic:
+                best_bic = b
+                best_km = km
+        except Exception:
+            break
+    if best_km is None:
+        best_km = KMeans(n_clusters=2, n_init=3, random_state=0).fit(X)
+    return best_km.labels_, best_km.cluster_centers_
 
-    lab_f = lab.astype(np.float32) / 255.0
-    # Scharr is a strong, stable gradient operator in OpenCV
-    mags = []
-    for ch in range(3):
-        gx = cv2.Scharr(lab_f[:, :, ch], cv2.CV_32F, 1, 0)
-        gy = cv2.Scharr(lab_f[:, :, ch], cv2.CV_32F, 0, 1)
-        mag = cv2.magnitude(gx, gy)
-        mags.append(mag)
-    edge_mag = np.maximum(np.maximum(mags[0], mags[1]), mags[2])  # channel-robust
 
-    # Normalize edge_mag inside scribble to 0..255 for Otsu
-    vals = edge_mag[pos_scr]
-    if vals.size < 32:
-        return pos_scr, 1.0
+def extract_line_pixels_in_scribble(img_bgr, pos_scr, max_k=6):
 
-    vmin = float(vals.min())
-    vmax = float(vals.max())
-    if vmax - vmin < 1e-6:
-        return pos_scr, 1.0
 
-    edge_norm = (edge_mag - vmin) / (vmax - vmin)
-    edge_u8 = np.clip(edge_norm * 255.0, 0, 255).astype(np.uint8)
 
-    # --- 2) Otsu threshold computed ONLY from scribble pixels ---
-    # We run Otsu on the 1D distribution but need a 2D array. Make a tiny image.
-    # Equivalent to applying Otsu to vals.
-    vals_u8 = edge_u8[pos_scr].reshape(-1, 1)
-    # Otsu threshold
-    thr, _ = cv2.threshold(vals_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # Apply threshold back to full image inside scribble
-    edge_keep = (edge_u8 >= thr) & pos_scr
+    # Lab色空間に変換（OpenCV uint8: L,a,b すべて [0,255]）
+    lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    # [0,1] に正規化してスケールを揃える
+    lab_norm = lab_img / 255.0
 
-    # --- 3) Suppress "interior" of thick scribbles using distance-transform ridge ---
-    # Ridge ~ local maxima of distance transform -> near scribble centerline
+    refined = np.zeros_like(pos_scr, dtype=bool)
     scr_u8 = pos_scr.astype(np.uint8)
-    dist = cv2.distanceTransform(scr_u8, cv2.DIST_L2, 3)
-    # local maxima: dist == dilate(dist)
-    dist_dil = cv2.dilate(dist, np.ones((3, 3), np.uint8))
-    ridge = (dist >= dist_dil - 1e-6) & pos_scr
+    num_labels, labels = cv2.connectedComponents(scr_u8, connectivity=8)
+    for lab in range(1, num_labels):
+        region_mask = labels == lab
+        region_area = int(region_mask.sum())
 
-    # Allow a tiny thickness around ridge to avoid being overly thin
-    ridge_u8 = ridge.astype(np.uint8)
-    ridge_band = cv2.dilate(ridge_u8, np.ones((3, 3), np.uint8)).astype(bool)
+        # (N, 3) の Lab 特徴量
+        feats = lab_norm[region_mask]  # shape: (N, 3)
 
-    refined = edge_keep & ridge_band
+        # X-means で Lab 空間をクラスタリング
+        cluster_labels, centers = _xmeans(feats, max_k=max_k)
+        # L値（第0次元）が最も小さいクラスタ = 最も暗い = 線画
+        darkest_cluster = int(np.argmin(centers[:, 0]))
+        line_pixels = cluster_labels == darkest_cluster
 
-    # --- 4) Remove tiny speckles (fixed safe constant) ---
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(refined.astype(np.uint8), connectivity=8)
-    cleaned = np.zeros_like(refined, dtype=bool)
-    for cid in range(1, num):
-        area = int(stats[cid, cv2.CC_STAT_AREA])
-        if area >= 8:  # small constant; usually safe across resolutions
-            cleaned[labels == cid] = True
+        # region_mask 内の座標に line_pixels を戻す
+        coords = np.argwhere(region_mask)
+        line_in_region = np.zeros_like(region_mask)
+        line_in_region[coords[line_pixels, 0], coords[line_pixels, 1]] = True
 
-    return cleaned
+        refined[line_in_region] = True
+    return refined
+
 
 
 def apply_clahe_bgr(image, clip_limit=2.0, tile_grid=8):
@@ -220,42 +219,47 @@ def normalize_image(img_rgb):
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     return (img_rgb - mean) / std
 
-def random_augment(x, t, m, e, p=0.8):
+
+def augment_tensors(x, t, m, e, aug_prob=0.8):
     """
-    Lightweight augmentation for single-image optimization.
-    Apply same geometric transform to x/t/m/e; photometric only to x.
+    Lightweight augmentation for single-image training.
+    Geometric transforms are applied consistently to x/t/m/e.
+    Photometric transforms are applied to x only.
     """
-    if torch.rand(1).item() > p:
+    if float(torch.rand(1).item()) >= float(aug_prob):
         return x, t, m, e
 
-    if torch.rand(1).item() < 0.5:
-        x = torch.flip(x, dims=[3])
-        t = torch.flip(t, dims=[3])
-        m = torch.flip(m, dims=[3])
-        e = torch.flip(e, dims=[3])
-    if torch.rand(1).item() < 0.3:
-        x = torch.flip(x, dims=[2])
-        t = torch.flip(t, dims=[2])
-        m = torch.flip(m, dims=[2])
-        e = torch.flip(e, dims=[2])
+    xb, tb, mb, eb = x, t, m, e
+
+    if float(torch.rand(1).item()) < 0.5:
+        xb = torch.flip(xb, dims=[3])
+        tb = torch.flip(tb, dims=[3])
+        mb = torch.flip(mb, dims=[3])
+        eb = torch.flip(eb, dims=[3])
+    if float(torch.rand(1).item()) < 0.5:
+        xb = torch.flip(xb, dims=[2])
+        tb = torch.flip(tb, dims=[2])
+        mb = torch.flip(mb, dims=[2])
+        eb = torch.flip(eb, dims=[2])
 
     k = int(torch.randint(0, 4, (1,)).item())
     if k > 0:
-        x = torch.rot90(x, k, dims=[2, 3])
-        t = torch.rot90(t, k, dims=[2, 3])
-        m = torch.rot90(m, k, dims=[2, 3])
-        e = torch.rot90(e, k, dims=[2, 3])
+        xb = torch.rot90(xb, k=k, dims=[2, 3])
+        tb = torch.rot90(tb, k=k, dims=[2, 3])
+        mb = torch.rot90(mb, k=k, dims=[2, 3])
+        eb = torch.rot90(eb, k=k, dims=[2, 3])
 
-    alpha = 0.9 + 0.2 * torch.rand(1, device=x.device)  # contrast
-    beta = -0.06 + 0.12 * torch.rand(1, device=x.device)  # brightness
-    x = torch.clamp(x * alpha + beta, -3.0, 3.0)
+    # Mild photometric jitter on normalized RGB.
+    if float(torch.rand(1).item()) < 0.8:
+        gain = 0.85 + 0.30 * float(torch.rand(1).item())  # [0.85, 1.15]
+        bias = (float(torch.rand(1).item()) - 0.5) * 0.20  # [-0.1, 0.1]
+        xb = xb * gain + bias
+    if float(torch.rand(1).item()) < 0.5:
+        noise_std = 0.01 + 0.03 * float(torch.rand(1).item())  # [0.01, 0.04]
+        xb = xb + torch.randn_like(xb) * noise_std
 
-    if torch.rand(1).item() < 0.4:
-        sigma = 0.015
-        x = x + sigma * torch.randn_like(x)
-        x = torch.clamp(x, -3.0, 3.0)
+    return xb, tb, mb, eb
 
-    return x, t, m, e
 
 def masked_bce_with_logits(logits, targets01, labeled_mask, pos_weight=1.0):
     """
@@ -322,16 +326,17 @@ def binarize_and_thin(mask01):
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--img", default="images/img_1.jpg")
-    ap.add_argument("--scribble", default="images/scr_2.jpg")
+    ap.add_argument("--img", default="images/img2.jpeg")
+    ap.add_argument("--scribble", default="images/scr2.jpg")
     ap.add_argument("--out", default="line_on_white.png")
     ap.add_argument("--out_mask", default="mask.png")
+    ap.add_argument("--out_alpha", default="line_alpha.png", help="probを透明度として元画像から線画を抽出したPNG（BGRA）")
     ap.add_argument("--out_pos_scr_refined", default="scribble.png", help="Optional path to save an overlay visualizing refined positive scribble pixels.")
     ap.add_argument("--out_prob", default="prob.png", help="Optional path to save the probability map as an 8-bit grayscale image.")
     ap.add_argument("--out_prob_npy", default="", help="Optional path to save the probability map as float32 .npy.")
     ap.add_argument("--max_size", type=int, default=5000)
-    ap.add_argument("--iters", type=int, default=1200)
-    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--iters", type=int, default=1000)
+    ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--base_ch", type=int, default=32)
     ap.add_argument("--thr", type=float, default=0.65, help="Used when --thr_method=fixed")
     ap.add_argument("--thr_method", choices=["fixed", "otsu", "percentile", "none"], default="otsu")
@@ -363,7 +368,8 @@ def main():
     ap.add_argument("--scribble_line_edge_thr", type=float, default=0.08)
     ap.add_argument("--open_ksize", type=int, default=0)
     ap.add_argument("--close_ksize", type=int, default=0)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--debug_dir", default="debug", help="デバッグ画像の保存先ディレクトリ（空文字で無効）")
+    ap.add_argument("--device", default="cuda:3")
     args = ap.parse_args()
 
     img_bgr = load_image(args.img)
@@ -389,26 +395,25 @@ def main():
     # extract line pixels in scribble
     edge = compute_edge_map(img_gray)
     pos_scr_refined = extract_line_pixels_in_scribble(
-        img_gray,
+        img_bgr,
         pos_scr,
     )
+    pos_scr_orig = pos_scr.copy()
     pos_scr = pos_scr_refined
-    mask_u8 = (pos_scr_refined.astype(np.uint8) * 255)
+    mask_u8 = (pos_scr.astype(np.uint8) * 255)
     cv2.imwrite(args.out_pos_scr_refined, mask_u8)
 
 
-    # Auto-generate background samples from a ring around line scribble
-    # This stabilizes training hugely without user needing to mark BG.
-    # We take pixels near scribble as BG candidates (outside scribble itself).
+    # Auto-generate background samples from positive scribble only.
+    # Use outside of dilated scribble as BG, without edge-based filtering.
     kernel = np.ones((7, 7), np.uint8)
     dil = cv2.dilate(pos_scr.astype(np.uint8), kernel, iterations=2)
+    cv2.imwrite("dil.png", dil.astype(np.uint8) * 255)
     ring = (dil == 1) & (~pos_scr)
-    cv2.imwrite("ring.png", (ring * 255).astype(np.uint8))
 
     # Use a conservative BG: ring pixels with low gradient are likely non-line interior
     bg_auto = ring & (edge < args.bg_edge_thr)
-    cv2.imwrite("bg_auto.png", (bg_auto * 255).astype(np.uint8))
-    
+    cv2.imwrite("bg_auto.png", bg_auto.astype(np.uint8) * 255)
     bg = neg_scr | bg_auto
 
     # Build target + labeled mask
@@ -429,42 +434,24 @@ def main():
     model = UNet(in_ch=3, base_ch=args.base_ch).to(args.device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=args.lr_factor, patience=args.lr_patience
+        opt, mode="min", factor=0.5, patience=200
     )
 
     # Auto class-balance for sparse lines
-    if args.pos_weight > 0:
-        pos_weight = args.pos_weight
-    else:
-        pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
-        neg_count = float(((t <= 0.5) * (m > 0.5)).sum().item())
-        pos_weight = (neg_count + 1.0) / (pos_count + 1.0)
-        pos_weight = float(np.clip(pos_weight, 1.0, 20.0))
-
-    # If too few labeled pixels, warn
-    labeled_count = float(m.sum().item())
-    if labeled_count < 200:
-        print(f"[WARN] Labeled pixels are few: {int(labeled_count)}. Add more scribble for stability.")
-    neg_ratio = float(neg_scr.mean())
-    if args.use_bg_scribble and neg_ratio > 0.50:
-        print(
-            f"[WARN] bg_scribble covers {neg_ratio*100:.1f}% pixels. "
-            "If this is unintended (e.g., black canvas), disable --use_bg_scribble."
-        )
-    print(
-        f"[INFO] pos_weight={pos_weight:.3f} | pos_scribble={int(pos_scr.sum())} "
-        f"| bg_scribble={int(neg_scr.sum())} | bg_edge_thr={args.bg_edge_thr:.3f}"
-    )
+    pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
+    neg_count = float(((t <= 0.5) * (m > 0.5)).sum().item())
+    pos_weight = (neg_count + 1.0) / (pos_count + 1.0)
+    pos_weight = float(np.clip(pos_weight, 1.0, 20.0))
 
     model.train()
     best_loss = float("inf")
     bad_iters = 0
     for it in range(args.iters):
         opt.zero_grad()
+
+        xb, tb, mb, eb = x, t, m, e
         if args.use_aug:
-            xb, tb, mb, eb = random_augment(x, t, m, e, p=args.aug_prob)
-        else:
-            xb, tb, mb, eb = x, t, m, e
+            xb, tb, mb, eb = augment_tensors(xb, tb, mb, eb, aug_prob=args.aug_prob)
 
         logits = model(xb)
         prob = torch.sigmoid(logits)
@@ -505,6 +492,22 @@ def main():
                 f"bce {loss_bce.item():.4f} dice {loss_dice.item():.4f} focal {loss_focal.item():.4f} "
                 f"tv {loss_tv.item():.4f} edge {loss_ed.item():.4f} | total {loss.item():.4f} | lr {lr_now:.2e}"
             )
+            # 途中経過のprobを保存
+            model.eval()
+            with torch.no_grad():
+                prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+            model.train()
+            # グレースケールprobを保存
+            prob_tmp_u8 = np.clip(prob_tmp * 255.0, 0, 255).astype(np.uint8)
+            cv2.imwrite(f"prob_iter{it+1:04d}.png", prob_tmp_u8)
+            # 白背景合成出力（probを透明度として元画像から線画を抽出）
+            if args.out_alpha:
+                prob_tmp_resized = cv2.resize(prob_tmp, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+                a = prob_tmp_resized[:, :, np.newaxis].astype(np.float32)
+                orig_bgr = orig_image if orig_image.shape[:2] == (orig_h, orig_w) else cv2.resize(orig_image, (orig_w, orig_h))
+                white = np.ones_like(orig_bgr, dtype=np.float32) * 255.0
+                blended = orig_bgr.astype(np.float32) * a + white * (1.0 - a)
+                cv2.imwrite(f"line_alpha_iter{it+1:04d}.png", blended.astype(np.uint8))
 
     model.eval()
     with torch.no_grad():
@@ -568,7 +571,18 @@ def main():
 
     cv2.imwrite(args.out, out_img)
     if args.out_mask:
+        thinned = cv2.bitwise_not(thinned)
         cv2.imwrite(args.out_mask, thinned)
+
+    # probを透明度として白背景に合成（元画像から線画を抽出）
+    if args.out_alpha:
+        a = prob_out[:, :, np.newaxis].astype(np.float32)
+        orig_bgr = cv2.resize(orig_image, (orig_w, orig_h)) if orig_image.shape[:2] != (orig_h, orig_w) else orig_image
+        white = np.ones_like(orig_bgr, dtype=np.float32) * 255.0
+        blended = orig_bgr.astype(np.float32) * a + white * (1.0 - a)
+        cv2.imwrite(args.out_alpha, blended.astype(np.uint8))
+        print(f"[OK] Saved alpha: {args.out_alpha}")
+
     print(f"[INFO] threshold={thr_val:.4f} ({args.thr_method}) | min_area={area_thr}")
     print(f"[OK] Saved: {args.out}")
 
