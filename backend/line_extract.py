@@ -5,7 +5,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import warnings
+if not hasattr(np, 'warnings'):
+    np.warnings = warnings
+from pyclustering.cluster.gmeans import gmeans
+from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
+from tqdm import tqdm
+from sklearn.cluster import KMeans
 # -----------------------------
 # Small U-Net
 # -----------------------------
@@ -31,11 +37,21 @@ class UNet(nn.Module):
         self.conv2 = DoubleConv(base_ch, base_ch*2)
         self.pool2 = nn.MaxPool2d(2)
         self.conv3 = DoubleConv(base_ch*2, base_ch*4)
+        self.pool3 = nn.MaxPool2d(2)
+        self.conv4 = DoubleConv(base_ch*4, base_ch*8)
+        self.pool4 = nn.MaxPool2d(2)
+        self.conv5 = DoubleConv(base_ch*8, base_ch*16)
+
+
         # up blocks
-        self.up1 = nn.ConvTranspose2d(base_ch*4, base_ch*2, kernel_size=2, stride=2)
-        self.conv4 = DoubleConv(base_ch*4, base_ch*2)
-        self.up2 = nn.ConvTranspose2d(base_ch*2, base_ch, kernel_size=2, stride=2)
-        self.conv5 = DoubleConv(base_ch*2, base_ch)
+        self.up1 = nn.ConvTranspose2d(base_ch*16, base_ch*8, kernel_size=2, stride=2)
+        self.conv6 = DoubleConv(base_ch*16, base_ch*8)
+        self.up2 = nn.ConvTranspose2d(base_ch*8, base_ch*4, kernel_size=2, stride=2)
+        self.conv7 = DoubleConv(base_ch*8, base_ch*4)
+        self.up3 = nn.ConvTranspose2d(base_ch*4, base_ch*2, kernel_size=2, stride=2)
+        self.conv8 = DoubleConv(base_ch*4, base_ch*2)
+        self.up4 = nn.ConvTranspose2d(base_ch*2, base_ch, kernel_size=2, stride=2)
+        self.conv9 = DoubleConv(base_ch*2, base_ch)
         # output
         self.out = nn.Conv2d(base_ch, 1, kernel_size=1)
 
@@ -45,18 +61,34 @@ class UNet(nn.Module):
         x2 = self.conv2(x1_pool)
         x2_pool = self.pool2(x2)
         x3 = self.conv3(x2_pool)
+        x3_pool = self.pool3(x3)
+        x4 = self.conv4(x3_pool)
+        # x4_pool = self.pool4(x4)
+        # x5 = self.conv5(x4_pool)    
 
-        y2 = self.up1(x3)
+        # y4 = self.up1(x5)
+        # if y4.shape[2:] != x4.shape[2:]: # 入力サイズが奇数の場合
+        #     y4 = F.interpolate(y4, size=x4.shape[2:], mode='bilinear', align_corners=False)
+        # y4 = torch.cat([y4, x4], dim=1)
+        # y4 = self.conv6(y4)
+
+        y3 = self.up2(x4)
+        if y3.shape[2:] != x3.shape[2:]: # 入力サイズが奇数の場合
+            y3 = F.interpolate(y3, size=x3.shape[2:], mode='bilinear', align_corners=False)
+        y3 = torch.cat([y3, x3], dim=1)
+        y3 = self.conv7(y3)
+
+        y2 = self.up3(y3)
         if y2.shape[2:] != x2.shape[2:]: # 入力サイズが奇数の場合
             y2 = F.interpolate(y2, size=x2.shape[2:], mode='bilinear', align_corners=False)
         y2 = torch.cat([y2, x2], dim=1)
-        y2 = self.conv4(y2)
+        y2 = self.conv8(y2)
 
-        y1 = self.up2(y2)   
+        y1 = self.up4(y2)   
         if y1.shape[2:] != x1.shape[2:]:
             y1 = F.interpolate(y1, size=x1.shape[2:], mode='bilinear', align_corners=False)
         y1 = torch.cat([y1, x1], dim=1)
-        y1 = self.conv5(y1)
+        y1 = self.conv9(y1)
 
         return self.out(y1) # logits
 
@@ -117,8 +149,92 @@ def make_scribble_label_mask(scr_bgr):
     mask[bg] = 0
     return mask
 
-import numpy as np
-import cv2
+
+
+# def _xmeans(X, max_k=6):
+#     """
+#     pyclusteringを用いたG-meansによるクラスタリング
+#     (関数名は後方互換でそのまま_xmeansとしています)
+#     X: float32 の (N, D) numpy array
+#     return: (cluster_labels, cluster_centers)  centers: (k, D)
+#     """
+#     if len(X) < 2:
+#         return np.zeros(len(X), dtype=int), X
+
+#     X_list = X.tolist()
+    
+#     # 探索の初期値
+#     init_k = min(2, len(X))
+#     xm_c = kmeans_plusplus_initializer(X_list, init_k).initialize()
+    
+#     # gmeansでの実行 (kmaxは類似のアルゴリズムのため適用しますがAPIが異なる可能性があります)
+#     # gmeansは自動決定するため初期クラスタ数は1で開始するか、渡した初期中心から開始します。
+#     # ここでは kmeans_plusplus_initializer の結果を2クラスタとして渡しています
+#     gm_i = gmeans(data=X_list, initial_centers=xm_c, kmax=max_k)
+#     gm_i.process()
+    
+#     clusters = gm_i.get_clusters()
+#     centers = np.array(gm_i.get_centers())
+    
+#     cluster_labels = np.zeros(len(X), dtype=int)
+#     for k, cluster in enumerate(clusters):
+#         cluster_labels[cluster] = k
+        
+#     return cluster_labels, centers
+
+
+# def extract_line_pixels_in_scribble(img_bgr, pos_scr, max_k=6):
+
+
+
+#     # Lab色空間に変換（OpenCV uint8: L,a,b すべて [0,255]）
+#     lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+#     # [0,1] に正規化してスケールを揃える
+#     lab_norm = lab_img / 255.0
+
+#     refined = np.zeros_like(pos_scr, dtype=bool)
+#     scr_u8 = pos_scr.astype(np.uint8)
+#     num_labels, labels = cv2.connectedComponents(scr_u8, connectivity=8)
+#     for lab in tqdm(range(1, num_labels), desc="Extracting line pixels"):
+#         region_mask = labels == lab
+#         region_area = int(region_mask.sum())
+
+#         # (N, 3) の Lab 特徴量
+#         feats = lab_norm[region_mask]  # shape: (N, 3)
+
+#         # X-means で Lab 空間をクラスタリング
+#         cluster_labels, centers = _xmeans(feats, max_k=max_k)
+#         # L値（第0次元）が最も小さいクラスタ = 最も暗い = 線画
+#         darkest_cluster = int(np.argmin(centers[:, 0]))
+#         line_pixels = cluster_labels == darkest_cluster
+
+#         # region_mask 内の座標に line_pixels を戻す
+#         coords = np.argwhere(region_mask)
+#         line_in_region = np.zeros_like(region_mask)
+#         line_in_region[coords[line_pixels, 0], coords[line_pixels, 1]] = True
+
+#         refined[line_in_region] = True
+#     return refined
+
+def bic(km, X):
+    n, d = X.shape
+    k = km.n_clusters
+    lbl = km.labels_
+    var = sum(
+        np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2)
+        for i in range(k)
+    ) / max(n - k, 1)
+    var = max(var, 1e-6)
+    log_lik = sum(
+        len(X[lbl == i]) * (
+            np.log(len(X[lbl == i]) / n + 1e-9)
+            - 0.5 * d * np.log(2 * np.pi * var)
+            - 0.5 * np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2) / var
+        )
+        for i in range(k)
+    )
+    n_params = k * d + k - 1
+    return -2 * log_lik + n_params * np.log(n)
 
 def _xmeans(X, max_k=6):
     """
@@ -126,27 +242,6 @@ def _xmeans(X, max_k=6):
     X: float32 の (N, D) numpy array
     return: (cluster_labels, cluster_centers)  centers: (k, D)
     """
-    from sklearn.cluster import KMeans
-
-    def bic(km, X):
-        n, d = X.shape
-        k = km.n_clusters
-        lbl = km.labels_
-        var = sum(
-            np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2)
-            for i in range(k)
-        ) / max(n - k, 1)
-        var = max(var, 1e-6)
-        log_lik = sum(
-            len(X[lbl == i]) * (
-                np.log(len(X[lbl == i]) / n + 1e-9)
-                - 0.5 * d * np.log(2 * np.pi * var)
-                - 0.5 * np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2) / var
-            )
-            for i in range(k)
-        )
-        n_params = k * d + k - 1
-        return -2 * log_lik + n_params * np.log(n)
 
     X = X.astype(np.float32)
     best_bic = np.inf
@@ -200,6 +295,7 @@ def extract_line_pixels_in_scribble(img_bgr, pos_scr, max_k=6):
 
 
 
+
 def apply_clahe_bgr(image, clip_limit=2.0, tile_grid=8):
     """
     Contrast normalization on luminance while preserving color.
@@ -249,13 +345,38 @@ def augment_tensors(x, t, m, e, aug_prob=0.8):
         mb = torch.rot90(mb, k=k, dims=[2, 3])
         eb = torch.rot90(eb, k=k, dims=[2, 3])
 
+    import torchvision.transforms.functional as TF
+    # Random Affine (translation & scale)
+    if float(torch.rand(1).item()) < 0.7:
+        angle = float((torch.rand(1).item() - 0.5) * 30.0) # -15 to +15 deg
+        translate = [float((torch.rand(1).item() - 0.5) * 0.1), float((torch.rand(1).item() - 0.5) * 0.1)] # up to 10% translation
+        scale = float(0.8 + 0.4 * torch.rand(1).item()) # 0.8x to 1.2x scale
+        shear = float((torch.rand(1).item() - 0.5) * 10.0) # -5 to +5 deg shear
+
+        # Apply to all spatial tensors consistently
+        # Use bilinear for images to avoid harsh pixelation
+        xb = TF.affine(xb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.BILINEAR)
+        # Use nearest neighbor for masks/labels to keep them clean {0,1}
+        tb = TF.affine(tb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.NEAREST)
+        mb = TF.affine(mb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.NEAREST)
+        eb = TF.affine(eb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.BILINEAR)
+
     # Mild photometric jitter on normalized RGB.
     if float(torch.rand(1).item()) < 0.8:
-        gain = 0.85 + 0.30 * float(torch.rand(1).item())  # [0.85, 1.15]
-        bias = (float(torch.rand(1).item()) - 0.5) * 0.20  # [-0.1, 0.1]
+        # Increase gain variance
+        gain = 0.70 + 0.60 * float(torch.rand(1).item())  # [0.70, 1.30]
+        bias = (float(torch.rand(1).item()) - 0.5) * 0.40  # [-0.2, 0.2]
         xb = xb * gain + bias
+    
+    # Color jitter (applied to normalized tensors, so it acts like a mild tint/contrast shift)
     if float(torch.rand(1).item()) < 0.5:
-        noise_std = 0.01 + 0.03 * float(torch.rand(1).item())  # [0.01, 0.04]
+        # Random channel scaling
+        c_scale = 0.9 + 0.2 * torch.rand(3, 1, 1).to(xb.device)
+        xb = xb * c_scale
+
+    if float(torch.rand(1).item()) < 0.5:
+        # Increase noise std slightly
+        noise_std = 0.01 + 0.05 * float(torch.rand(1).item())  # [0.01, 0.06]
         xb = xb + torch.randn_like(xb) * noise_std
 
     return xb, tb, mb, eb
@@ -326,8 +447,8 @@ def binarize_and_thin(mask01):
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--img", default="images/img2.jpeg")
-    ap.add_argument("--scribble", default="images/scr2.jpg")
+    ap.add_argument("--img", default="images/umika.png")
+    ap.add_argument("--scribble", default="images/umika_scr.png")
     ap.add_argument("--out", default="line_on_white.png")
     ap.add_argument("--out_mask", default="mask.png")
     ap.add_argument("--out_alpha", default="line_alpha.png", help="probを透明度として元画像から線画を抽出したPNG（BGRA）")
@@ -335,8 +456,8 @@ def main():
     ap.add_argument("--out_prob", default="prob.png", help="Optional path to save the probability map as an 8-bit grayscale image.")
     ap.add_argument("--out_prob_npy", default="", help="Optional path to save the probability map as float32 .npy.")
     ap.add_argument("--max_size", type=int, default=5000)
-    ap.add_argument("--iters", type=int, default=1000)
-    ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--iters", type=int, default=1200)
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--base_ch", type=int, default=32)
     ap.add_argument("--thr", type=float, default=0.65, help="Used when --thr_method=fixed")
     ap.add_argument("--thr_method", choices=["fixed", "otsu", "percentile", "none"], default="otsu")
@@ -421,8 +542,8 @@ def main():
     target = np.zeros_like(img_gray, dtype=np.float32)
     labeled = np.zeros_like(img_gray, dtype=np.float32)
     target[pos_scr] = 1.0
-    labeled[pos_scr] = 1.0
     target[bg] = 0.0
+    labeled[pos_scr] = 1.0
     labeled[bg] = 1.0
 
     # Torch tensors
@@ -441,12 +562,13 @@ def main():
     pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
     neg_count = float(((t <= 0.5) * (m > 0.5)).sum().item())
     pos_weight = (neg_count + 1.0) / (pos_count + 1.0)
-    pos_weight = float(np.clip(pos_weight, 1.0, 20.0))
+    # pos_weight = float(np.clip(pos_weight, 1.0, 1000.0))
 
     model.train()
-    best_loss = float("inf")
-    bad_iters = 0
-    for it in range(args.iters):
+    # best_loss = float("inf")
+    # bad_iters = 0
+    pbar = tqdm(range(args.iters), desc="UNet Training")
+    for it in pbar:
         opt.zero_grad()
 
         xb, tb, mb, eb = x, t, m, e
@@ -458,41 +580,46 @@ def main():
 
         loss_bce = masked_bce_with_logits(logits, tb, mb, pos_weight=pos_weight)
         loss_dice = masked_dice_loss(prob, tb, mb)
-        loss_focal = masked_focal_with_logits(
-            logits, tb, mb, alpha=args.focal_alpha, gamma=args.focal_gamma
-        )
-        loss_tv = total_variation(prob)
-        loss_ed = edge_alignment_loss(prob, eb)
+        # loss_focal = masked_focal_with_logits(
+        #     logits, tb, mb, alpha=args.focal_alpha, gamma=args.focal_gamma
+        # )
+        # loss_tv = total_variation(prob)
+        # loss_ed = edge_alignment_loss(prob, eb)
 
         loss = (
             args.w_bce * loss_bce
-            + args.w_dice * loss_dice
-            + args.w_focal * loss_focal
-            + args.w_tv * loss_tv
-            + args.w_edge * loss_ed
+            + loss_dice
+            # + args.w_focal * loss_focal
+            # + args.w_tv * loss_tv
+            # + args.w_edge * loss_ed
         )
         loss.backward()
         opt.step()
         scheduler.step(loss.item())
 
-        cur_loss = float(loss.item())
-        if cur_loss < (best_loss - args.early_stop_min_delta):
-            best_loss = cur_loss
-            bad_iters = 0
-        else:
-            bad_iters += 1
-        if bad_iters >= args.early_stop_patience:
-            print(f"[INFO] Early stop at iter {it+1} (best_loss={best_loss:.4f})")
-            break
+        # cur_loss = float(loss.item())
+        # if cur_loss < (best_loss - args.early_stop_min_delta):
+        #     best_loss = cur_loss
+        #     bad_iters = 0
+        # else:
+        #     bad_iters += 1
+        # if bad_iters >= args.early_stop_patience:
+        #     print(f"[INFO] Early stop at iter {it+1} (best_loss={best_loss:.4f})")
+        #     break
+
+        pbar.set_postfix({
+            "loss_bce": f"{loss_bce.item():.4f}",
+            "loss_dice": f"{loss_dice.item():.4f}",
+        })
 
         if (it + 1) % 100 == 0 or it == 0:
-            lr_now = opt.param_groups[0]["lr"]
-            print(
-                f"iter {it+1:4d}/{args.iters} | "
-                f"bce {loss_bce.item():.4f} dice {loss_dice.item():.4f} focal {loss_focal.item():.4f} "
-                f"tv {loss_tv.item():.4f} edge {loss_ed.item():.4f} | total {loss.item():.4f} | lr {lr_now:.2e}"
-            )
-            # 途中経過のprobを保存
+            # lr_now = opt.param_groups[0]["lr"]
+            # print(
+                # f"iter {it+1:4d}/{args.iters}"
+            #     f"bce {loss_bce.item():.4f} dice {loss_dice.item():.4f} focal {loss_focal.item():.4f} "
+            #     f"tv {loss_tv.item():.4f} edge {loss_ed.item():.4f} | total {loss.item():.4f} | lr {lr_now:.2e}"
+            # )
+            # # 途中経過のprobを保存
             model.eval()
             with torch.no_grad():
                 prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
