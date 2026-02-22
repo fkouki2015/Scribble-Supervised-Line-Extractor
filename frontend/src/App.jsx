@@ -7,9 +7,10 @@ export default function App() {
   const [thr, setThr] = useState(128);
   const [lineWidth, setLineWidth] = useState(30);
   const [probUrl, setProbUrl] = useState("");
+  const [maxSize, setMaxSize] = useState(5000);
   const [scribbleColor, setScribbleColor] = useState("rgb(0,255,0)");
   const [penType, setPenType] = useState("scribble");
-  const [useClahe, setUseClahe] = useState(true);
+  const [useClahe, setUseClahe] = useState(false);
   const [claheClip, setClaheClip] = useState(2.0);
   const [claheGrid, setClaheGrid] = useState(8);
   const [lr, setLr] = useState(1e-3);
@@ -165,6 +166,7 @@ export default function App() {
     formData.append("use_clahe", useClahe);
     formData.append("clahe_clip", claheClip);
     formData.append("clahe_grid", claheGrid);
+    formData.append("max_size", maxSize);
 
     const res = await fetch("http://127.0.0.1:8000/api/refine_scribble", {
       method: "POST",
@@ -206,6 +208,7 @@ export default function App() {
     formData.append("lr", lr);
     formData.append("iters", iters);
     formData.append("device", device)
+    formData.append("max_size", maxSize);
 
     // CRAのproxyを使うなら "/api/predict" のように相対パス推奨
     const res = await fetch("http://127.0.0.1:8000/api/predict_line", {
@@ -299,6 +302,18 @@ export default function App() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span>maxSize</span>
+          <input
+            type="number"
+            min={256}
+            step={256}
+            value={maxSize}
+            onChange={(e) => setMaxSize(parseInt(e.target.value || "0", 10) || 0)}
+            style={{ width: 90 }}
+          />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span>Tool:</span>
           <label>
             <input type="radio" value="scribble" checked={penType === "scribble"} onChange={(e) => setPenType(e.target.value)} /> Pen
@@ -322,6 +337,15 @@ export default function App() {
       <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
         <button onClick={refineScribble} disabled={!imgUrl}>Refine Scribble</button>
         <button onClick={predict} disabled={!imgUrl}>Predict Line</button>
+        <span>Iterations</span>
+          <input
+            type="range"
+            min={1}
+            max={2000}
+            value={iters}
+            onChange={(e) => setIters(parseInt(e.target.value, 10))}
+          />
+        <span>{iters}</span>
       </div>
 
       {imgUrl && (

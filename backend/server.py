@@ -32,7 +32,8 @@ async def api_refine_scribble(
     scribble: UploadFile = File(...),
     use_clahe: bool = Form(False),
     clahe_clip: float = Form(2.0),
-    clahe_grid: int = Form(8)
+    clahe_grid: int = Form(8),
+    max_size: int = Form(5000)
 ):
     req_id = str(uuid.uuid4())
     img_path = f"temp/{req_id}_img.png"
@@ -41,7 +42,7 @@ async def api_refine_scribble(
     save_file(image, img_path)
     save_file(scribble, scr_path)
     
-    refined_scr_u8 = refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid)
+    refined_scr_u8 = refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid, max_size)
 
     refined_scr_path = f"temp/{req_id}_scr_refined.png"
     cv2.imwrite(refined_scr_path, refined_scr_u8)
@@ -58,7 +59,8 @@ async def api_predict_line(
     refined_scribble: UploadFile = File(...),
     lr: float = Form(1e-3),
     iters: int = Form(1000),
-    device: str = Form("cuda")
+    device: str = Form("cuda"),
+    max_size: int = Form(5000)
 ):
 
     req_id = str(uuid.uuid4())
@@ -70,7 +72,7 @@ async def api_predict_line(
     save_file(scribble, scr_path)
     save_file(refined_scribble, refined_scr_path)
     
-    predicted_line = predict_line(img_path, scr_path, refined_scr_path, lr, iters, device)
+    predicted_line = predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size)
 
     line_path = f"temp/{req_id}_line.png"
     cv2.imwrite(line_path, predicted_line)

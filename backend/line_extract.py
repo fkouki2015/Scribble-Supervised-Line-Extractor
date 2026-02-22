@@ -443,9 +443,11 @@ def binarize_and_thin(mask01):
     except Exception:
         return mask01
 
-def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid):
+def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid, max_size=5000):
     img_bgr = cv2.imread(img_path)
     scr_bgr = cv2.imread(scr_path, -1)
+
+    orig_h, orig_w = img_bgr.shape[:2]
 
     if scr_bgr.shape[2] == 4:
         index = np.where(scr_bgr[:, :, 3] == 0)
@@ -454,6 +456,12 @@ def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid):
 
     if use_clahe:
         img_bgr = apply_clahe_bgr(img_bgr, clip_limit=clahe_clip, tile_grid=clahe_grid)
+
+    # Resize for speed/memory (restore to original size before returning)
+    img_bgr_resized, scale = resize_to_max(img_bgr, int(max_size))
+    if scale != 1.0:
+        scr_bgr = cv2.resize(scr_bgr, (img_bgr_resized.shape[1], img_bgr_resized.shape[0]), interpolation=cv2.INTER_NEAREST)
+    img_bgr = img_bgr_resized
     
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     img_rgb = normalize_image(img_rgb)
@@ -470,12 +478,16 @@ def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid):
 
     refined_scr_u8 = (pos_scr_refined.astype(np.uint8) * 255)
     refined_scr_u8 = cv2.LUT(refined_scr_u8, 255-np.arange(256)).astype(np.uint8)
+
+    if refined_scr_u8.shape[:2] != (orig_h, orig_w):
+        refined_scr_u8 = cv2.resize(refined_scr_u8, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
     return refined_scr_u8
 
 
-def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device):
+def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size=5000):
     img_bgr = cv2.imread(img_path)
     scr_bgr = cv2.imread(scr_path, -1)
+    orig_h, orig_w = img_bgr.shape[:2]
     if scr_bgr.shape[2] == 4:
         index = np.where(scr_bgr[:, :, 3] == 0)
         scr_bgr[index] = [0, 0, 0, 0]
@@ -485,10 +497,17 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device):
     refined_scr_bgr = cv2.imread(refined_scr_path)
     refined_scr_bgr = cv2.LUT(refined_scr_bgr, 255-np.arange(256)).astype(np.uint8)
 
+    # Resize for speed/memory (restore output to original size before returning)
+    img_bgr_resized, scale = resize_to_max(img_bgr, int(max_size))
+    if scale != 1.0:
+        scr_bgr = cv2.resize(scr_bgr, (img_bgr_resized.shape[1], img_bgr_resized.shape[0]), interpolation=cv2.INTER_NEAREST)
+        refined_scr_bgr = cv2.resize(refined_scr_bgr, (img_bgr_resized.shape[1], img_bgr_resized.shape[0]), interpolation=cv2.INTER_NEAREST)
+    img_bgr = img_bgr_resized
+
     pos_scr = scr_bgr[:, :, 1] == 255
     neg_scr = scr_bgr[:, :, 2] == 255
     refined_pos_scr = refined_scr_bgr[:, :, 0] == 255
-
+    cv2.imwrite("debug_refined_pos_scr.png", refined_pos_scr.astype(np.uint8)*255)
     kernel = np.ones((7, 7), np.uint8)
     dil = cv2.dilate(refined_pos_scr.astype(np.uint8), kernel, iterations=2)
     cv2.imwrite("dil.png", dil.astype(np.uint8) * 255)
@@ -566,7 +585,12 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device):
     a = prob_tmp[:, :, np.newaxis].astype(np.float32)
     white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
     blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
-    return blended.astype(np.uint8)
+    cv2.imwrite("debug_prob.png", blended.astype(np.uint8))
+    out = blended.astype(np.uint8)
+    if out.shape[:2] != (orig_h, orig_w):
+        out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+    cv2.imwrite("debug_out_resized.png", out)
+    return out
         
 
 
