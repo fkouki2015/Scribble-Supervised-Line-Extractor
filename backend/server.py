@@ -57,7 +57,8 @@ async def api_predict_line(
     scribble: UploadFile = File(...),
     refined_scribble: UploadFile = File(...),
     lr: float = Form(1e-3),
-    iters: int = Form(1000)
+    iters: int = Form(1000),
+    device: str = Form("cuda")
 ):
 
     req_id = str(uuid.uuid4())
@@ -69,8 +70,9 @@ async def api_predict_line(
     save_file(scribble, scr_path)
     save_file(refined_scribble, refined_scr_path)
     
-    predicted_line = predict_line(img_path, scr_path, refined_scr_path, lr, iters)
+    predicted_line = predict_line(img_path, scr_path, refined_scr_path, lr, iters, device)
 
+    line_path = f"temp/{req_id}_line.png"
     cv2.imwrite(line_path, predicted_line)
 
     if os.path.exists(line_path):

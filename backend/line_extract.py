@@ -473,21 +473,27 @@ def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid):
     return refined_scr_u8
 
 
-def predict_line(img_path, scr_path, refined_scr_path, lr, iters):
+def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device):
     img_bgr = cv2.imread(img_path)
     scr_bgr = cv2.imread(scr_path, -1)
     if scr_bgr.shape[2] == 4:
         index = np.where(scr_bgr[:, :, 3] == 0)
         scr_bgr[index] = [0, 0, 0, 0]
         scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
-    refined_scr_bgr = cv2.imread(refined_scr_path)
 
-    pos_scr = refined_scr_bgr[:, :, 1] == 255
-    neg_scr = refined_scr_bgr[:, :, 2] == 255
+    cv2.imwrite("debug_scr.png", scr_bgr)
+    refined_scr_bgr = cv2.imread(refined_scr_path)
+    refined_scr_bgr = cv2.LUT(refined_scr_bgr, 255-np.arange(256)).astype(np.uint8)
+
+    pos_scr = scr_bgr[:, :, 1] == 255
+    neg_scr = scr_bgr[:, :, 2] == 255
+    refined_pos_scr = refined_scr_bgr[:, :, 0] == 255
 
     kernel = np.ones((7, 7), np.uint8)
-    dil = cv2.dilate(pos_scr.astype(np.uint8), kernel, iterations=2)
-    ring = (dil == 1) & (~pos_scr)
+    dil = cv2.dilate(refined_pos_scr.astype(np.uint8), kernel, iterations=2)
+    cv2.imwrite("dil.png", dil.astype(np.uint8) * 255)
+    ring = (dil == 1) & (refined_pos_scr == 0)
+    cv2.imwrite("ring.png", ring.astype(np.uint8) * 255)
 
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     img_rgb = normalize_image(img_rgb)
@@ -496,20 +502,21 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters):
     edge = compute_edge_map(img_gray)
     bg_auto = ring & (edge < 0.1)
     bg = neg_scr | bg_auto
+    cv2.imwrite("debug_bg.png", bg.astype(np.uint8)*255)
 
     target = np.zeros_like(img_gray, dtype=np.float32)
     labeled = np.zeros_like(img_gray, dtype=np.float32)
-    target[pos_scr] = 1.0
+    target[refined_pos_scr] = 1.0
     target[bg] = 0.0
-    labeled[pos_scr] = 1.0
+    labeled[refined_pos_scr] = 1.0
     labeled[bg] = 1.0
 
-    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to("cpu")  # 1x3xHxW
-    t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to("cpu")        # 1x1xHxW
-    m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to("cpu")       # 1x1xHxW
-    e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to("cpu")
+    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)  # 1x3xHxW
+    t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(device)        # 1x1xHxW
+    m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to(device)       # 1x1xHxW
+    e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(device)
 
-    model = UNet(in_ch=3, base_ch=32).to("cpu")
+    model = UNet(in_ch=3, base_ch=32).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         opt, mode="min", factor=0.5, patience=200
@@ -544,15 +551,23 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters):
             "loss_dice": f"{loss_dice.item():.4f}",
         })
 
-        if (it + 1) % 100 == 0 or it == 0:
-            model.eval()
-            with torch.no_grad():
-                prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
-            model.train()
-            a = prob_tmp[:, :, np.newaxis].astype(np.float32)
-            white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
-            blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+        # if (it + 1) % 100 == 0 or it == 0:
+        #     model.eval()
+        #     with torch.no_grad():
+        #         prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+        #     model.train()
+        #     a = prob_tmp[:, :, np.newaxis].astype(np.float32)
+        #     white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
+        #     blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
 
+    model.eval()
+    with torch.no_grad():
+        prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+    a = prob_tmp[:, :, np.newaxis].astype(np.float32)
+    white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
+    blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+    return blended.astype(np.uint8)
+        
 
 
 # -----------------------------

@@ -13,7 +13,8 @@ export default function App() {
   const [claheClip, setClaheClip] = useState(2.0);
   const [claheGrid, setClaheGrid] = useState(8);
   const [lr, setLr] = useState(1e-3);
-  const [iters, setIters] = useState(1);
+  const [iters, setIters] = useState(700);
+  const [device, setDevice] = useState("cuda")
 
 
   const imgRef = useRef(null);
@@ -204,6 +205,7 @@ export default function App() {
     formData.append("refined_scribble", new File([blob_line], "refined_scribble.png", { type: "image/png" }));
     formData.append("lr", lr);
     formData.append("iters", iters);
+    formData.append("device", device)
 
     // CRAのproxyを使うなら "/api/predict" のように相対パス推奨
     const res = await fetch("http://127.0.0.1:8000/api/predict_line", {
