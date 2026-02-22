@@ -12,6 +12,7 @@ from pyclustering.cluster.gmeans import gmeans
 from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
 from tqdm import tqdm
 from sklearn.cluster import KMeans
+os.environ["OMP_NUM_THREADS"] = "1"
 # -----------------------------
 # Small U-Net
 # -----------------------------
@@ -96,15 +97,15 @@ class UNet(nn.Module):
 # -----------------------------
 # Utilities
 # -----------------------------
-def load_image(path, color_mode=cv2.IMREAD_COLOR):
-    '''
-    path: path to image
-    return: image in BGR format
-    '''
-    img = cv2.imread(path, color_mode)
-    if img is None:
-        raise FileNotFoundError(f"Cannot read: {path}")
-    return img
+# def load_image(path, color_mode=cv2.IMREAD_COLOR):
+#     '''
+#     path: path to image
+#     return: image in BGR format
+#     '''
+#     img = cv2.imread(path, color_mode)
+#     if img is None:
+#         raise FileNotFoundError(f"Cannot read: {path}")
+#     return img
 
 def resize_to_max(img, max_size=1024):
     '''
@@ -142,7 +143,7 @@ def make_scribble_label_mask(scr_bgr):
     """
     b, g, r = cv2.split(scr_bgr)
 
-    line = (r > 250) & (g > 250) & (b > 250)
+    line = (r < 5) & (g > 250) & (b < 5)
     bg = (r >250) & (g < 5) & (b < 5)
     mask = np.full(scr_bgr.shape[:2], -1, dtype=np.int8)
     mask[line] = 1
@@ -442,6 +443,118 @@ def binarize_and_thin(mask01):
     except Exception:
         return mask01
 
+def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid):
+    img_bgr = cv2.imread(img_path)
+    scr_bgr = cv2.imread(scr_path, -1)
+
+    if scr_bgr.shape[2] == 4:
+        index = np.where(scr_bgr[:, :, 3] == 0)
+        scr_bgr[index] = [0, 0, 0, 0]
+        scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
+
+    if use_clahe:
+        img_bgr = apply_clahe_bgr(img_bgr, clip_limit=clahe_clip, tile_grid=clahe_grid)
+    
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img_rgb = normalize_image(img_rgb)
+    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    scr_mask = make_scribble_label_mask(scr_bgr)
+    pos_scr = scr_mask == 1 # line scribble
+    neg_scr = scr_mask == 0 # bg scribble
+
+    pos_scr_refined = extract_line_pixels_in_scribble(
+        img_bgr,
+        pos_scr,
+    )
+
+    refined_scr_u8 = (pos_scr_refined.astype(np.uint8) * 255)
+    refined_scr_u8 = cv2.LUT(refined_scr_u8, 255-np.arange(256)).astype(np.uint8)
+    return refined_scr_u8
+
+
+def predict_line(img_path, scr_path, refined_scr_path, lr, iters):
+    img_bgr = cv2.imread(img_path)
+    scr_bgr = cv2.imread(scr_path, -1)
+    if scr_bgr.shape[2] == 4:
+        index = np.where(scr_bgr[:, :, 3] == 0)
+        scr_bgr[index] = [0, 0, 0, 0]
+        scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
+    refined_scr_bgr = cv2.imread(refined_scr_path)
+
+    pos_scr = refined_scr_bgr[:, :, 1] == 255
+    neg_scr = refined_scr_bgr[:, :, 2] == 255
+
+    kernel = np.ones((7, 7), np.uint8)
+    dil = cv2.dilate(pos_scr.astype(np.uint8), kernel, iterations=2)
+    ring = (dil == 1) & (~pos_scr)
+
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img_rgb = normalize_image(img_rgb)
+    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    edge = compute_edge_map(img_gray)
+    bg_auto = ring & (edge < 0.1)
+    bg = neg_scr | bg_auto
+
+    target = np.zeros_like(img_gray, dtype=np.float32)
+    labeled = np.zeros_like(img_gray, dtype=np.float32)
+    target[pos_scr] = 1.0
+    target[bg] = 0.0
+    labeled[pos_scr] = 1.0
+    labeled[bg] = 1.0
+
+    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to("cpu")  # 1x3xHxW
+    t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to("cpu")        # 1x1xHxW
+    m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to("cpu")       # 1x1xHxW
+    e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to("cpu")
+
+    model = UNet(in_ch=3, base_ch=32).to("cpu")
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode="min", factor=0.5, patience=200
+    )
+
+    pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
+    neg_count = float(((t <= 0.5) * (m > 0.5)).sum().item())
+    pos_weight = (neg_count + 1.0) / (pos_count + 1.0)
+
+    model.train()
+
+    pbar = tqdm(range(iters), desc="UNet Training")
+    for it in pbar:
+        opt.zero_grad()
+
+        xb, tb, mb, _ = augment_tensors(x, t, m, e, aug_prob=0.8)
+
+
+        logits = model(xb)
+        prob = torch.sigmoid(logits)
+
+        loss_bce = masked_bce_with_logits(logits, tb, mb, pos_weight=pos_weight)
+        loss_dice = masked_dice_loss(prob, tb, mb)
+
+        loss = (loss_bce + loss_dice)
+        loss.backward()
+        opt.step()
+        scheduler.step(loss.item())
+
+        pbar.set_postfix({
+            "loss_bce": f"{loss_bce.item():.4f}",
+            "loss_dice": f"{loss_dice.item():.4f}",
+        })
+
+        if (it + 1) % 100 == 0 or it == 0:
+            model.eval()
+            with torch.no_grad():
+                prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+            model.train()
+            a = prob_tmp[:, :, np.newaxis].astype(np.float32)
+            white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
+            blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+
+
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -490,7 +603,7 @@ def main():
     ap.add_argument("--open_ksize", type=int, default=0)
     ap.add_argument("--close_ksize", type=int, default=0)
     ap.add_argument("--debug_dir", default="debug", help="デバッグ画像の保存先ディレクトリ（空文字で無効）")
-    ap.add_argument("--device", default="cuda:3")
+    ap.add_argument("--device", default="cpu")
     args = ap.parse_args()
 
     img_bgr = load_image(args.img)
