@@ -226,36 +226,21 @@ export default function App() {
     setProbUrl(url);
   };
 
-  // prob png を out canvas に二値化表示（thr変更で即時反映）
+  // prob png を out canvas にそのまま表示（カラー）
   useEffect(() => {
     const out = outRef.current;
     if (!probUrl || !out) return;
 
     const img = new Image();
     img.onload = () => {
+      out.width = img.naturalWidth;
+      out.height = img.naturalHeight;
       const ctx = out.getContext("2d");
       ctx.clearRect(0, 0, out.width, out.height);
-
-      // probを読み込み
       ctx.drawImage(img, 0, 0);
-
-      const im = ctx.getImageData(0, 0, out.width, out.height);
-      const d = im.data;
-
-      // prob png はグレースケール(0..255)想定
-      for (let i = 0; i < d.length; i += 4) {
-        const p = d[i]; // R
-        const v = p >= thr ? 255 : 0;
-        d[i] = v;
-        d[i + 1] = v;
-        d[i + 2] = v;
-        d[i + 3] = 255;
-      }
-
-      ctx.putImageData(im, 0, 0);
     };
     img.src = probUrl;
-  }, [probUrl, thr]);
+  }, [probUrl]);
 
 
 

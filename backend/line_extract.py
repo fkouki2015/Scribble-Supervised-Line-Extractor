@@ -8,10 +8,8 @@ import torch.nn.functional as F
 import warnings
 if not hasattr(np, 'warnings'):
     np.warnings = warnings
-from pyclustering.cluster.gmeans import gmeans
-from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
+from skimage.filters import frangi
 from tqdm import tqdm
-from sklearn.cluster import KMeans
 os.environ["OMP_NUM_THREADS"] = "1"
 # -----------------------------
 # Small U-Net
@@ -152,146 +150,64 @@ def make_scribble_label_mask(scr_bgr):
 
 
 
-# def _xmeans(X, max_k=6):
-#     """
-#     pyclusteringを用いたG-meansによるクラスタリング
-#     (関数名は後方互換でそのまま_xmeansとしています)
-#     X: float32 の (N, D) numpy array
-#     return: (cluster_labels, cluster_centers)  centers: (k, D)
-#     """
-#     if len(X) < 2:
-#         return np.zeros(len(X), dtype=int), X
-
-#     X_list = X.tolist()
-    
-#     # 探索の初期値
-#     init_k = min(2, len(X))
-#     xm_c = kmeans_plusplus_initializer(X_list, init_k).initialize()
-    
-#     # gmeansでの実行 (kmaxは類似のアルゴリズムのため適用しますがAPIが異なる可能性があります)
-#     # gmeansは自動決定するため初期クラスタ数は1で開始するか、渡した初期中心から開始します。
-#     # ここでは kmeans_plusplus_initializer の結果を2クラスタとして渡しています
-#     gm_i = gmeans(data=X_list, initial_centers=xm_c, kmax=max_k)
-#     gm_i.process()
-    
-#     clusters = gm_i.get_clusters()
-#     centers = np.array(gm_i.get_centers())
-    
-#     cluster_labels = np.zeros(len(X), dtype=int)
-#     for k, cluster in enumerate(clusters):
-#         cluster_labels[cluster] = k
-        
-#     return cluster_labels, centers
-
-
-# def extract_line_pixels_in_scribble(img_bgr, pos_scr, max_k=6):
-
-
-
-#     # Lab色空間に変換（OpenCV uint8: L,a,b すべて [0,255]）
-#     lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-#     # [0,1] に正規化してスケールを揃える
-#     lab_norm = lab_img / 255.0
-
-#     refined = np.zeros_like(pos_scr, dtype=bool)
-#     scr_u8 = pos_scr.astype(np.uint8)
-#     num_labels, labels = cv2.connectedComponents(scr_u8, connectivity=8)
-#     for lab in tqdm(range(1, num_labels), desc="Extracting line pixels"):
-#         region_mask = labels == lab
-#         region_area = int(region_mask.sum())
-
-#         # (N, 3) の Lab 特徴量
-#         feats = lab_norm[region_mask]  # shape: (N, 3)
-
-#         # X-means で Lab 空間をクラスタリング
-#         cluster_labels, centers = _xmeans(feats, max_k=max_k)
-#         # L値（第0次元）が最も小さいクラスタ = 最も暗い = 線画
-#         darkest_cluster = int(np.argmin(centers[:, 0]))
-#         line_pixels = cluster_labels == darkest_cluster
-
-#         # region_mask 内の座標に line_pixels を戻す
-#         coords = np.argwhere(region_mask)
-#         line_in_region = np.zeros_like(region_mask)
-#         line_in_region[coords[line_pixels, 0], coords[line_pixels, 1]] = True
-
-#         refined[line_in_region] = True
-#     return refined
-
-def bic(km, X):
-    n, d = X.shape
-    k = km.n_clusters
-    lbl = km.labels_
-    var = sum(
-        np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2)
-        for i in range(k)
-    ) / max(n - k, 1)
-    var = max(var, 1e-6)
-    log_lik = sum(
-        len(X[lbl == i]) * (
-            np.log(len(X[lbl == i]) / n + 1e-9)
-            - 0.5 * d * np.log(2 * np.pi * var)
-            - 0.5 * np.sum((X[lbl == i] - km.cluster_centers_[i]) ** 2) / var
-        )
-        for i in range(k)
-    )
-    n_params = k * d + k - 1
-    return -2 * log_lik + n_params * np.log(n)
-
-def _xmeans(X, max_k=6):
+def extract_line_pixels_in_scribble(img_bgr, pos_scr, sigmas=(1, 2, 3)):
     """
-    多次元データに対するX-means（BIC基準でクラスタ数を自動決定）．
-    X: float32 の (N, D) numpy array
-    return: (cluster_labels, cluster_centers)  centers: (k, D)
+    Frangi vesselness フィルターを使い、各スクリブル連結成分内の
+    細い線状構造を輝度差に依存せず形状的に検出する。
+
+    Frangi はヘシアン行列の固有値分析で「線らしさ」を計算するため、
+    背景と線の輝度差が小さい・背景に模様があっても動作する。
+
+    Args:
+        img_bgr : 入力画像 (BGR uint8)
+        pos_scr : スクリブルマスク (bool H×W)
+        sigmas  : 検出するスケール（線の太さに合わせる）
     """
-
-    X = X.astype(np.float32)
-    best_bic = np.inf
-    best_km = None
-    for k in range(2, min(max_k + 1, len(X))):
-        try:
-            km = KMeans(n_clusters=k, n_init=3, random_state=0).fit(X)
-            b = bic(km, X)
-            if b < best_bic:
-                best_bic = b
-                best_km = km
-        except Exception:
-            break
-    if best_km is None:
-        best_km = KMeans(n_clusters=2, n_init=3, random_state=0).fit(X)
-    return best_km.labels_, best_km.cluster_centers_
-
-
-def extract_line_pixels_in_scribble(img_bgr, pos_scr, max_k=6):
-
-
-
-    # Lab色空間に変換（OpenCV uint8: L,a,b すべて [0,255]）
-    lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    # [0,1] に正規化してスケールを揃える
-    lab_norm = lab_img / 255.0
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
     refined = np.zeros_like(pos_scr, dtype=bool)
     scr_u8 = pos_scr.astype(np.uint8)
     num_labels, labels = cv2.connectedComponents(scr_u8, connectivity=8)
-    for lab in range(1, num_labels):
-        region_mask = labels == lab
-        region_area = int(region_mask.sum())
 
-        # (N, 3) の Lab 特徴量
-        feats = lab_norm[region_mask]  # shape: (N, 3)
+    for lab_id in range(1, num_labels):
+        region_mask = labels == lab_id
 
-        # X-means で Lab 空間をクラスタリング
-        cluster_labels, centers = _xmeans(feats, max_k=max_k)
-        # L値（第0次元）が最も小さいクラスタ = 最も暗い = 線画
-        darkest_cluster = int(np.argmin(centers[:, 0]))
-        line_pixels = cluster_labels == darkest_cluster
+        # bounding box を切り出してその patch に対して Frangi を計算
+        ys, xs = np.where(region_mask)
+        y0, y1 = ys.min(), ys.max() + 1
+        x0, x1 = xs.min(), xs.max() + 1
+        patch = gray[y0:y1, x0:x1]
+        response_patch = frangi(patch, sigmas=sigmas, black_ridges=True)
 
-        # region_mask 内の座標に line_pixels を戻す
-        coords = np.argwhere(region_mask)
+        local_mask = region_mask[y0:y1, x0:x1]
+        resp_vals = response_patch[local_mask]
+
+        # 応答がほぼゼロ（線画なし）はスキップ
+        if resp_vals.max() < 1e-8:
+            continue
+
+        # 応答を [0, 255] に正規化して Otsu の半分を閾値として使用
+        # （Otsu より低めにすることで線画の取りこぼしを減らす）
+        resp_norm = resp_vals / (resp_vals.max() + 1e-9)
+        resp_u8 = np.clip(resp_norm * 255, 0, 255).astype(np.uint8)
+
+        if len(np.unique(resp_u8)) < 2:
+            continue
+
+        otsu_thresh, _ = cv2.threshold(resp_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        low_thresh = max(otsu_thresh * 0.5, 1)
+        line_pixels = resp_u8 >= low_thresh
+
+        if line_pixels.sum() == 0:
+            continue
+
+        # ローカル座標 → フル画像座標に戻す
+        local_coords = np.argwhere(local_mask)
         line_in_region = np.zeros_like(region_mask)
-        line_in_region[coords[line_pixels, 0], coords[line_pixels, 1]] = True
-
+        line_in_region[local_coords[line_pixels, 0] + y0,
+                       local_coords[line_pixels, 1] + x0] = True
         refined[line_in_region] = True
+
     return refined
 
 
@@ -585,7 +501,6 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     a = prob_tmp[:, :, np.newaxis].astype(np.float32)
     white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
     blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
-    cv2.imwrite("debug_prob.png", blended.astype(np.uint8))
     out = blended.astype(np.uint8)
     if out.shape[:2] != (orig_h, orig_w):
         out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
