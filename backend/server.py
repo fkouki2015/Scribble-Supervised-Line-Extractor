@@ -130,8 +130,9 @@ async def api_apply_frangi_percentile(
 ):
     frangi_path = "temp/frangi.png"
     scr_path = "temp/scr.png"
+    img_path = "temp/img.png"
 
-    refined_bgr = apply_frangi_percentile(frangi_path, scr_path, percentile)
+    refined_bgr = apply_frangi_percentile(frangi_path, scr_path, percentile, img_path=img_path)
 
     refined_path = "temp/scr_refined.png"
     cv2.imwrite(refined_path, refined_bgr)

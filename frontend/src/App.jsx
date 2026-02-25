@@ -284,11 +284,10 @@ export default function App() {
       style={{
         padding: 16,
         fontFamily: "sans-serif",
-        height: "100vh",
+        height: "100%",
+        overflowY: "auto",
+        overflowX: "hidden",
         boxSizing: "border-box",
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
       }}
     >
       <h2>Scribble-Supervised Line Extractor</h2>
@@ -367,7 +366,7 @@ export default function App() {
         <span style={{ opacity: frangiBlob ? 1 : 0.4 }}>Percentile</span>
           <input
             type="range"
-            min={90}
+            min={50}
             max={100}
             step={0.1}
             value={frangiPercentile}
@@ -380,7 +379,7 @@ export default function App() {
           />
           <input
             type="number"
-            min={90}
+            min={50}
             max={100}
             step={0.1}
             value={frangiPercentile}
@@ -415,14 +414,14 @@ export default function App() {
 
         
       {imgUrl && (
-        <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0, overflow: "hidden", alignItems: "stretch" }}>
+        <div style={{ display: "flex", gap: 16 }}>
           {/* 左側: 入力画像とスクリブル */}
-          <div style={{ position: "relative", height: "100%", display: "inline-block" }}>
+          <div style={{ position: "relative", display: "inline-block" }}>
             <img
               ref={imgRef}
               src={imgUrl}
               alt=""
-              style={{ maxWidth: "45vw", maxHeight: "100%", height: "auto", display: "block" }}
+              style={{ maxWidth: "45vw", height: "auto", display: "block" }}
             />
 
             {/* スクリブル */}
@@ -477,11 +476,11 @@ export default function App() {
           </div>
 
           {/* 右側: 出力結果 */}
-          <div style={{ position: "relative", height: "100%", display: "inline-block", backgroundColor: "white" }}>
+          <div style={{ position: "relative", display: "inline-block", backgroundColor: "white" }}>
             <img
               src={imgUrl}
               alt="Output background"
-              style={{ maxWidth: "45vw", maxHeight: "100%", height: "auto", display: "block", visibility: "hidden" }}
+              style={{ maxWidth: "45vw", height: "auto", display: "block", visibility: "hidden" }}
             />
             {/* 出力（二値化結果） */}
             <canvas

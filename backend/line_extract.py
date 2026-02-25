@@ -62,27 +62,27 @@ class UNet(nn.Module):
         x2 = self.conv2(x1_pool)
         x2_pool = self.pool2(x2)
         x3 = self.conv3(x2_pool)
-        # x3_pool = self.pool3(x3)
-        # x4 = self.conv4(x3_pool)
-        # x4_pool = self.pool4(x4)
-        # x5 = self.conv5(x4_pool)    
+        x3_pool = self.pool3(x3)
+        x4 = self.conv4(x3_pool)
+        x4_pool = self.pool4(x4)
+        x5 = self.conv5(x4_pool)    
         # x5_pool = self.pool5(x5)
         # x6 = self.conv5_1(x5_pool)
         
 
-        # y4 = self.up1(x6)
-        # if y4.shape[2:] != x4.shape[2:]: # 入力サイズが奇数の場合
-        #     y4 = F.interpolate(y4, size=x4.shape[2:], mode='bilinear', align_corners=False)
-        # y4 = torch.cat([y4, x4], dim=1)
-        # y4 = self.conv6(y4)
+        y4 = self.up1(x5)
+        if y4.shape[2:] != x4.shape[2:]: # 入力サイズが奇数の場合
+            y4 = F.interpolate(y4, size=x4.shape[2:], mode='bilinear', align_corners=False)
+        y4 = torch.cat([y4, x4], dim=1)
+        y4 = self.conv6(y4)
 
-        # y3 = self.up2(y4)
-        # if y3.shape[2:] != x3.shape[2:]: # 入力サイズが奇数の場合
-        #     y3 = F.interpolate(y3, size=x3.shape[2:], mode='bilinear', align_corners=False)
-        # y3 = torch.cat([y3, x3], dim=1)
-        # y3 = self.conv7(y3)
+        y3 = self.up2(y4)
+        if y3.shape[2:] != x3.shape[2:]: # 入力サイズが奇数の場合
+            y3 = F.interpolate(y3, size=x3.shape[2:], mode='bilinear', align_corners=False)
+        y3 = torch.cat([y3, x3], dim=1)
+        y3 = self.conv7(y3)
 
-        y2 = self.up3(x3)
+        y2 = self.up3(y3)
         if y2.shape[2:] != x2.shape[2:]: # 入力サイズが奇数の場合
             y2 = F.interpolate(y2, size=x2.shape[2:], mode='bilinear', align_corners=False)
         y2 = torch.cat([y2, x2], dim=1)
@@ -343,10 +343,90 @@ def compute_frangi_response(img_path, scr_path, use_clahe, clahe_clip, clahe_gri
 
 
 
-def apply_frangi_percentile(frangi_path, scr_path, percentile):
+def _shift_with_valid(img_f32, dy, dx):
+    """Shift image by (dy, dx) with valid mask (no wrap-around).
+
+    Returns:
+      shifted: float32 array (same shape)
+      valid: uint8 {0,1} array indicating pixels with a valid shifted value
+    """
+    h, w = img_f32.shape
+    shifted = np.zeros((h, w), dtype=np.float32)
+    valid = np.zeros((h, w), dtype=np.uint8)
+
+    if dy >= 0:
+        ys_src = slice(0, h - dy)
+        ys_dst = slice(dy, h)
+    else:
+        ys_src = slice(-dy, h)
+        ys_dst = slice(0, h + dy)
+
+    if dx >= 0:
+        xs_src = slice(0, w - dx)
+        xs_dst = slice(dx, w)
+    else:
+        xs_src = slice(-dx, w)
+        xs_dst = slice(0, w + dx)
+
+    shifted[ys_dst, xs_dst] = img_f32[ys_src, xs_src]
+    valid[ys_dst, xs_dst] = 1
+    return shifted, valid
+
+
+def _keep_two_sided_contrast(gray_u8, candidate_mask, *, delta=8.0, distances=(1, 2)):
+    """Reject edge-like candidates where intensity changes only on one side.
+
+    We keep a candidate pixel if there exists a direction where both sides
+    (along that direction) are brighter than the center by at least `delta`.
+
+    Args:
+      gray_u8: grayscale uint8 image
+      candidate_mask: boolean mask of Frangi candidates
+      delta: minimum per-side intensity difference in uint8 units
+      distances: sample distances (in pixels) to average on each side
+    """
+    if candidate_mask is None or not np.any(candidate_mask):
+        return candidate_mask
+
+    g = gray_u8.astype(np.float32)
+    c = g
+    delta_f = float(delta)
+
+    directions = ((1, 0), (0, 1), (1, 1), (1, -1))
+    keep_any = np.zeros_like(candidate_mask, dtype=bool)
+
+    for dx, dy in directions:
+        sum_pos = np.zeros_like(g, dtype=np.float32)
+        cnt_pos = np.zeros_like(g, dtype=np.uint8)
+        sum_neg = np.zeros_like(g, dtype=np.float32)
+        cnt_neg = np.zeros_like(g, dtype=np.uint8)
+
+        for dist in distances:
+            sp, vp = _shift_with_valid(g, dy * int(dist), dx * int(dist))
+            sn, vn = _shift_with_valid(g, -dy * int(dist), -dx * int(dist))
+            sum_pos += sp
+            cnt_pos += vp
+            sum_neg += sn
+            cnt_neg += vn
+
+        valid = (cnt_pos > 0) & (cnt_neg > 0)
+        pos_mean = sum_pos / np.maximum(cnt_pos.astype(np.float32), 1.0)
+        neg_mean = sum_neg / np.maximum(cnt_neg.astype(np.float32), 1.0)
+
+        # Two-sided contrast for dark ridges: both sides brighter than center.
+        cond = valid & ((pos_mean - c) > delta_f) & ((neg_mean - c) > delta_f)
+        keep_any |= cond
+
+    return candidate_mask & keep_any
+
+
+
+def apply_frangi_percentile(frangi_path, scr_path, percentile, img_path=None, *, two_sided_delta=8.0):
 
     frangi_bgr = cv2.imread(frangi_path, -1)
     scr_bgr = cv2.imread(scr_path, -1)
+
+    scr = scr_bgr
 
     if scr_bgr.ndim == 3 and scr_bgr.shape[2] == 4:
         idx = np.where(scr_bgr[:, :, 3] == 0)
@@ -358,9 +438,19 @@ def apply_frangi_percentile(frangi_path, scr_path, percentile):
     response = frangi_bgr.astype(np.float64) / 255.0
     pos_mask = _apply_hysteresis_percentile(response, neg_scr, float(percentile))
 
-    refined_bgr = (pos_mask.astype(np.uint8) * 255)
-    refined_bgr = cv2.LUT(refined_bgr, 255 - np.arange(256)).astype(np.uint8)
-    return refined_bgr
+    # Filter out edge-like responses: keep only pixels with two-sided intensity change.
+    if img_path is not None and os.path.exists(str(img_path)):
+        img_bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+        if img_bgr is not None:
+            gray_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            pos_mask = _keep_two_sided_contrast(gray_u8, pos_mask, delta=float(two_sided_delta))
+
+    # refined_bgr = (pos_mask.astype(np.uint8) * 255)
+    # refined_bgr = cv2.LUT(refined_bgr, 255 - np.arange(256)).astype(np.uint8)
+    a = pos_mask[:, :, np.newaxis].astype(np.float32)
+    white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
+    blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+    return blended
 
 
 def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size=5000):
