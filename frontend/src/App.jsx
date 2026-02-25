@@ -10,12 +10,14 @@ export default function App() {
   const [maxSize, setMaxSize] = useState(5000);
   const [scribbleColor, setScribbleColor] = useState("rgb(0,255,0)");
   const [penType, setPenType] = useState("scribble");
-  const [useClahe, setUseClahe] = useState(false);
+  const [useClahe, setUseClahe] = useState(true);
   const [claheClip, setClaheClip] = useState(2.0);
   const [claheGrid, setClaheGrid] = useState(8);
   const [lr, setLr] = useState(1e-3);
   const [iters, setIters] = useState(700);
   const [device, setDevice] = useState("cuda")
+  const [frangiPercentile, setFrangiPercentile] = useState(99.7);
+  const [frangiBlob, setFrangiBlob] = useState(null); // uint8 PNG blob returned by /api/compute_frangi
 
 
   const imgRef = useRef(null);
@@ -24,6 +26,7 @@ export default function App() {
 
   const [drawing, setDrawing] = useState(false);
   const last = useRef(null); // {x:number, y:number}
+  const debounceTimer = useRef(null);
   const [cursorPos, setCursorPos] = useState(null); // {x:number, y:number} | null
 
   // --- Undo (Ctrl+Z) 履歴管理 ---
@@ -143,13 +146,14 @@ export default function App() {
   const clearScribble = () => {
     saveState(); // 消去前にも履歴を保存
     const sc = scribbleRef.current;
-    const out = outRef.current;
+    // const out = outRef.current;
     if (sc) sc.getContext("2d").clearRect(0, 0, sc.width, sc.height);
-    if (out) out.getContext("2d").clearRect(0, 0, out.width, out.height);
+    // if (out) out.getContext("2d").clearRect(0, 0, out.width, out.height);
     setProbUrl("");
   };
 
-  const refineScribble = async () => {
+  // --- Step 1: Frangi応答を計算してサーバー側にキャッシュ（重い処理、1回だけ） ---
+  const computeFrangi = async () => {
     const sc = scribbleRef.current;
     if (!sc || !imgFile) return;
     const blob = await new Promise((resolve) =>
@@ -168,35 +172,63 @@ export default function App() {
     formData.append("clahe_grid", claheGrid);
     formData.append("max_size", maxSize);
 
-    const res = await fetch("http://127.0.0.1:8000/api/refine_scribble", {
+    const res = await fetch("http://127.0.0.1:8000/api/compute_frangi", {
       method: "POST",
       body: formData,
     });
-
     if (!res.ok) {
-      alert("スクリブル画像の送信に失敗しました");
+      alert("Frangi計算に失敗しました");
       return;
     }
+    const newFrangiBlob = await res.blob();
+    setFrangiBlob(newFrangiBlob);
 
-    const outBlob = await res.blob();
-    const url = URL.createObjectURL(outBlob);
-    setProbUrl(url);
+    // 初回のpercentile適用（state更新を待たず、ローカルblobを使う）
+    await _applyPercentile(newFrangiBlob, blob, frangiPercentile);
   };
+
+  // frangiBlob と scribble blob を両方送って refined mask を受け取る
+  const _applyPercentile = async (fBlob, scrBlob, p) => {
+    if (!fBlob || !scrBlob) return;
+    const formData = new FormData();
+    // formData.append("frangi_image", new File([fBlob],  "frangi.png",   { type: "image/png" }));
+    // formData.append("scribble",     new File([scrBlob], "scribble.png", { type: "image/png" }));
+    formData.append("percentile", p);
+    const res = await fetch("http://127.0.0.1:8000/api/apply_frangi_percentile", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      alert("Percentile適用に失敗しました");
+      return;
+    }
+    setProbUrl(URL.createObjectURL(await res.blob()));
+  };
+
+  // --- Step 2: スライダー用 debounce ラッパー ---
+  const applyPercentile = (p) => {
+    if (!frangiBlob) return;
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(async () => {
+      const sc = scribbleRef.current;
+      if (!sc) return;
+      const scrBlob = await new Promise((resolve) => sc.toBlob((b) => resolve(b), "image/png"));
+      await _applyPercentile(frangiBlob, scrBlob, p);
+    }, 150);
+  };
+
 
 
 
   const predict = async () => {
     const sc = scribbleRef.current;
-    const line = outRef.current;
-    if (!imgFile || !sc || !line) return;
+    if (!imgFile || !sc) return;
 
     const blob_scr = await new Promise((resolve) =>
       sc.toBlob((b) => resolve(b), "image/png")
     );
-    const blob_line = await new Promise((resolve) =>
-      line.toBlob((b) => resolve(b), "image/png")
-    );
-    if (!blob_scr || !blob_line) {
+
+    if (!blob_scr) {
       alert("Failed to capture scribble");
       return;
     }
@@ -204,7 +236,7 @@ export default function App() {
     const formData = new FormData();
     formData.append("image", imgFile);
     formData.append("scribble", new File([blob_scr], "scribble.png", { type: "image/png" }));
-    formData.append("refined_scribble", new File([blob_line], "refined_scribble.png", { type: "image/png" }));
+    formData.append("refined_scribble", frangiBlob);
     formData.append("lr", lr);
     formData.append("iters", iters);
     formData.append("device", device)
@@ -248,7 +280,17 @@ export default function App() {
 
 
   return (
-    <div style={{ padding: 16, fontFamily: "sans-serif" }}>
+    <div
+      style={{
+        padding: 16,
+        fontFamily: "sans-serif",
+        height: "100vh",
+        boxSizing: "border-box",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <h2>Scribble-Supervised Line Extractor</h2>
 
       <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
@@ -293,7 +335,7 @@ export default function App() {
             min={256}
             step={256}
             value={maxSize}
-            onChange={(e) => setMaxSize(parseInt(e.target.value || "0", 10) || 0)}
+            onChange={(e) => setMaxSize(e.target.value)}
             style={{ width: 90 }}
           />
         </div>
@@ -319,29 +361,68 @@ export default function App() {
         </div>
       </div>
 
+
       <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
-        <button onClick={refineScribble} disabled={!imgUrl}>Refine Scribble</button>
-        <button onClick={predict} disabled={!imgUrl}>Predict Line</button>
-        <span>Iterations</span>
+        <button onClick={computeFrangi} disabled={!imgUrl}>Frangi 計算</button>
+        <span style={{ opacity: frangiBlob ? 1 : 0.4 }}>Percentile</span>
           <input
             type="range"
-            min={1}
-            max={2000}
-            value={iters}
-            onChange={(e) => setIters(parseInt(e.target.value, 10))}
+            min={90}
+            max={100}
+            step={0.1}
+            value={frangiPercentile}
+            disabled={!frangiBlob}
+            onChange={(e) => {
+              setFrangiPercentile(e.target.value);
+              applyPercentile(e.target.value);
+            }}
+            style={{ width: 120 }}
           />
-        <span>{iters}</span>
+          <input
+            type="number"
+            min={90}
+            max={100}
+            step={0.1}
+            value={frangiPercentile}
+            disabled={!frangiBlob}
+            onChange={(e) => {
+              setFrangiPercentile(e.target.value);
+              applyPercentile(e.target.value);
+            }}
+            style={{ width: 70 }}
+          />
+        <button onClick={predict} disabled={!imgUrl || !frangiBlob}>Predict Line</button>
+        <span>Learning Rate</span>
+          <input
+            type="number"
+            min={1e-7}
+            step={1e-7}
+            value={lr}
+            onChange={(e) => setLr(e.target.value)}
+            style={{ width: 90 }}
+          />
+        <span>Iterations</span>
+          <input
+            type="number"
+            min={10}
+            step={100}
+            value={iters}
+            onChange={(e) => setIters(e.target.value)}
+            style={{ width: 90 }}
+          />
+        {/* <span>{iters}</span> */}
       </div>
 
+        
       {imgUrl && (
-        <div style={{ display: "flex", gap: 16 }}>
+        <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0, overflow: "hidden", alignItems: "stretch" }}>
           {/* 左側: 入力画像とスクリブル */}
-          <div style={{ position: "relative", display: "inline-block" }}>
+          <div style={{ position: "relative", height: "100%", display: "inline-block" }}>
             <img
               ref={imgRef}
               src={imgUrl}
               alt=""
-              style={{ maxWidth: "45vw", height: "auto", display: "block" }}
+              style={{ maxWidth: "45vw", maxHeight: "100%", height: "auto", display: "block" }}
             />
 
             {/* スクリブル */}
@@ -396,11 +477,11 @@ export default function App() {
           </div>
 
           {/* 右側: 出力結果 */}
-          <div style={{ position: "relative", display: "inline-block", backgroundColor: "white" }}>
+          <div style={{ position: "relative", height: "100%", display: "inline-block", backgroundColor: "white" }}>
             <img
               src={imgUrl}
               alt="Output background"
-              style={{ maxWidth: "45vw", height: "auto", display: "block", visibility: "hidden" }}
+              style={{ maxWidth: "45vw", maxHeight: "100%", height: "auto", display: "block", visibility: "hidden" }}
             />
             {/* 出力（二値化結果） */}
             <canvas

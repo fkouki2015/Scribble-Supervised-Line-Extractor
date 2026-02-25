@@ -40,6 +40,8 @@ class UNet(nn.Module):
         self.conv4 = DoubleConv(base_ch*4, base_ch*8)
         self.pool4 = nn.MaxPool2d(2)
         self.conv5 = DoubleConv(base_ch*8, base_ch*16)
+        self.pool5 = nn.MaxPool2d(2)
+        self.conv5_1 = DoubleConv(base_ch*16, base_ch*16)
 
 
         # up blocks
@@ -60,24 +62,27 @@ class UNet(nn.Module):
         x2 = self.conv2(x1_pool)
         x2_pool = self.pool2(x2)
         x3 = self.conv3(x2_pool)
-        x3_pool = self.pool3(x3)
-        x4 = self.conv4(x3_pool)
+        # x3_pool = self.pool3(x3)
+        # x4 = self.conv4(x3_pool)
         # x4_pool = self.pool4(x4)
         # x5 = self.conv5(x4_pool)    
+        # x5_pool = self.pool5(x5)
+        # x6 = self.conv5_1(x5_pool)
+        
 
-        # y4 = self.up1(x5)
+        # y4 = self.up1(x6)
         # if y4.shape[2:] != x4.shape[2:]: # 入力サイズが奇数の場合
         #     y4 = F.interpolate(y4, size=x4.shape[2:], mode='bilinear', align_corners=False)
         # y4 = torch.cat([y4, x4], dim=1)
         # y4 = self.conv6(y4)
 
-        y3 = self.up2(x4)
-        if y3.shape[2:] != x3.shape[2:]: # 入力サイズが奇数の場合
-            y3 = F.interpolate(y3, size=x3.shape[2:], mode='bilinear', align_corners=False)
-        y3 = torch.cat([y3, x3], dim=1)
-        y3 = self.conv7(y3)
+        # y3 = self.up2(y4)
+        # if y3.shape[2:] != x3.shape[2:]: # 入力サイズが奇数の場合
+        #     y3 = F.interpolate(y3, size=x3.shape[2:], mode='bilinear', align_corners=False)
+        # y3 = torch.cat([y3, x3], dim=1)
+        # y3 = self.conv7(y3)
 
-        y2 = self.up3(y3)
+        y2 = self.up3(x3)
         if y2.shape[2:] != x2.shape[2:]: # 入力サイズが奇数の場合
             y2 = F.interpolate(y2, size=x2.shape[2:], mode='bilinear', align_corners=False)
         y2 = torch.cat([y2, x2], dim=1)
@@ -92,34 +97,8 @@ class UNet(nn.Module):
         return self.out(y1) # logits
 
 
-# -----------------------------
-# Utilities
-# -----------------------------
-# def load_image(path, color_mode=cv2.IMREAD_COLOR):
-#     '''
-#     path: path to image
-#     return: image in BGR format
-#     '''
-#     img = cv2.imread(path, color_mode)
-#     if img is None:
-#         raise FileNotFoundError(f"Cannot read: {path}")
-#     return img
 
-def resize_to_max(img, max_size=1024):
-    '''
-    img: image in BGR format
-    max_size: maximum size
-    return: resized image and scale factor
-    '''
-    h, w = img.shape[:2]
-    s = max(h, w)
-    if s <= max_size:
-        return img, 1.0
-    scale = max_size / s
-    new_w = int(round(w * scale))
-    new_h = int(round(h * scale))
-    out = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return out, scale
+
 
 
 def compute_edge_map(gray_img):
@@ -148,67 +127,6 @@ def make_scribble_label_mask(scr_bgr):
     mask[bg] = 0
     return mask
 
-
-
-def extract_line_pixels_in_scribble(img_bgr, pos_scr, sigmas=(1, 2, 3)):
-    """
-    Frangi vesselness フィルターを使い、各スクリブル連結成分内の
-    細い線状構造を輝度差に依存せず形状的に検出する。
-
-    Frangi はヘシアン行列の固有値分析で「線らしさ」を計算するため、
-    背景と線の輝度差が小さい・背景に模様があっても動作する。
-
-    Args:
-        img_bgr : 入力画像 (BGR uint8)
-        pos_scr : スクリブルマスク (bool H×W)
-        sigmas  : 検出するスケール（線の太さに合わせる）
-    """
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-
-    refined = np.zeros_like(pos_scr, dtype=bool)
-    scr_u8 = pos_scr.astype(np.uint8)
-    num_labels, labels = cv2.connectedComponents(scr_u8, connectivity=8)
-
-    for lab_id in range(1, num_labels):
-        region_mask = labels == lab_id
-
-        # bounding box を切り出してその patch に対して Frangi を計算
-        ys, xs = np.where(region_mask)
-        y0, y1 = ys.min(), ys.max() + 1
-        x0, x1 = xs.min(), xs.max() + 1
-        patch = gray[y0:y1, x0:x1]
-        response_patch = frangi(patch, sigmas=sigmas, black_ridges=True)
-
-        local_mask = region_mask[y0:y1, x0:x1]
-        resp_vals = response_patch[local_mask]
-
-        # 応答がほぼゼロ（線画なし）はスキップ
-        if resp_vals.max() < 1e-8:
-            continue
-
-        # 応答を [0, 255] に正規化して Otsu の半分を閾値として使用
-        # （Otsu より低めにすることで線画の取りこぼしを減らす）
-        resp_norm = resp_vals / (resp_vals.max() + 1e-9)
-        resp_u8 = np.clip(resp_norm * 255, 0, 255).astype(np.uint8)
-
-        if len(np.unique(resp_u8)) < 2:
-            continue
-
-        otsu_thresh, _ = cv2.threshold(resp_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        low_thresh = max(otsu_thresh * 0.5, 1)
-        line_pixels = resp_u8 >= low_thresh
-
-        if line_pixels.sum() == 0:
-            continue
-
-        # ローカル座標 → フル画像座標に戻す
-        local_coords = np.argwhere(local_mask)
-        line_in_region = np.zeros_like(region_mask)
-        line_in_region[local_coords[line_pixels, 0] + y0,
-                       local_coords[line_pixels, 1] + x0] = True
-        refined[line_in_region] = True
-
-    return refined
 
 
 
@@ -359,45 +277,90 @@ def binarize_and_thin(mask01):
     except Exception:
         return mask01
 
-def refine_scribble(img_path, scr_path, use_clahe, clahe_clip, clahe_grid, max_size=5000):
+def _apply_hysteresis_percentile(response, neg_scr, percentile, low_percentile=None):
+
+    valid = ~neg_scr
+    resp_vals = response[valid]
+    if resp_vals.size == 0:
+        return np.zeros(response.shape, dtype=bool)
+
+    maxv = float(np.max(resp_vals))
+    if not np.isfinite(maxv) or maxv <= 1e-8:
+        return np.zeros(response.shape, dtype=bool)
+
+    hi_p = float(np.clip(percentile, 0.0, 100.0))
+    lo_p = max(0.0, hi_p - 2.0) if low_percentile is None else float(np.clip(low_percentile, 0.0, hi_p))
+
+    thr_hi = float(np.percentile(resp_vals, hi_p))
+    thr_lo = float(np.percentile(resp_vals, lo_p))
+
+    eps = 1e-8
+    seed = (response >= thr_hi) & (response > eps) & valid
+    grow = (response >= thr_lo) & (response > eps) & valid
+
+    if not np.any(seed):
+        return grow
+
+    grow_u8 = grow.astype(np.uint8) * 255
+    num, labels = cv2.connectedComponents(grow_u8, connectivity=8)
+    if num <= 1:
+        return seed
+
+    keep = np.zeros(num, dtype=bool)
+    seed_labels = labels[seed]
+    if seed_labels.size > 0:
+        keep[np.unique(seed_labels)] = True
+
+    out = keep[labels]
+    out &= valid
+    return out
+
+
+# def _frangi_percentile_mask(img_bgr, neg_scr, percentile=99.0, sigmas=(1, 2, 3), black_ridges=True, low_percentile=None):
+#     """Compute Frangi response then apply hysteresis percentile threshold."""
+#     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+#     response = frangi(gray, sigmas=sigmas, black_ridges=black_ridges)
+#     return _apply_hysteresis_percentile(response, neg_scr, percentile, low_percentile)
+
+def compute_frangi_response(img_path, scr_path, use_clahe, clahe_clip, clahe_grid, max_size):
+
     img_bgr = cv2.imread(img_path)
     scr_bgr = cv2.imread(scr_path, -1)
 
-    orig_h, orig_w = img_bgr.shape[:2]
-
-    if scr_bgr.shape[2] == 4:
-        index = np.where(scr_bgr[:, :, 3] == 0)
-        scr_bgr[index] = [0, 0, 0, 0]
+    if scr_bgr.ndim == 3 and scr_bgr.shape[2] == 4:
+        idx = np.where(scr_bgr[:, :, 3] == 0)
+        scr_bgr[idx] = [0, 0, 0, 0]
         scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
 
     if use_clahe:
         img_bgr = apply_clahe_bgr(img_bgr, clip_limit=clahe_clip, tile_grid=clahe_grid)
 
-    # Resize for speed/memory (restore to original size before returning)
-    img_bgr_resized, scale = resize_to_max(img_bgr, int(max_size))
-    if scale != 1.0:
-        scr_bgr = cv2.resize(scr_bgr, (img_bgr_resized.shape[1], img_bgr_resized.shape[0]), interpolation=cv2.INTER_NEAREST)
-    img_bgr = img_bgr_resized
-    
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    img_rgb = normalize_image(img_rgb)
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    scr_mask = make_scribble_label_mask(scr_bgr)
-    pos_scr = scr_mask == 1 # line scribble
-    neg_scr = scr_mask == 0 # bg scribble
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    response = frangi(gray, sigmas=(1, 2, 3), black_ridges=True)
 
-    pos_scr_refined = extract_line_pixels_in_scribble(
-        img_bgr,
-        pos_scr,
-    )
+    return np.clip(response / (response.max() + 1e-9) * 255, 0, 255).astype(np.uint8)
 
-    refined_scr_u8 = (pos_scr_refined.astype(np.uint8) * 255)
-    refined_scr_u8 = cv2.LUT(refined_scr_u8, 255-np.arange(256)).astype(np.uint8)
 
-    if refined_scr_u8.shape[:2] != (orig_h, orig_w):
-        refined_scr_u8 = cv2.resize(refined_scr_u8, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-    return refined_scr_u8
+
+def apply_frangi_percentile(frangi_path, scr_path, percentile):
+
+    frangi_bgr = cv2.imread(frangi_path, -1)
+    scr_bgr = cv2.imread(scr_path, -1)
+
+    if scr_bgr.ndim == 3 and scr_bgr.shape[2] == 4:
+        idx = np.where(scr_bgr[:, :, 3] == 0)
+        scr_bgr[idx] = [0, 0, 0, 0]
+        scr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
+
+    neg_scr = (make_scribble_label_mask(scr) == 0)
+
+    response = frangi_bgr.astype(np.float64) / 255.0
+    pos_mask = _apply_hysteresis_percentile(response, neg_scr, float(percentile))
+
+    refined_bgr = (pos_mask.astype(np.uint8) * 255)
+    refined_bgr = cv2.LUT(refined_bgr, 255 - np.arange(256)).astype(np.uint8)
+    return refined_bgr
 
 
 def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size=5000):
@@ -413,12 +376,6 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     refined_scr_bgr = cv2.imread(refined_scr_path)
     refined_scr_bgr = cv2.LUT(refined_scr_bgr, 255-np.arange(256)).astype(np.uint8)
 
-    # Resize for speed/memory (restore output to original size before returning)
-    img_bgr_resized, scale = resize_to_max(img_bgr, int(max_size))
-    if scale != 1.0:
-        scr_bgr = cv2.resize(scr_bgr, (img_bgr_resized.shape[1], img_bgr_resized.shape[0]), interpolation=cv2.INTER_NEAREST)
-        refined_scr_bgr = cv2.resize(refined_scr_bgr, (img_bgr_resized.shape[1], img_bgr_resized.shape[0]), interpolation=cv2.INTER_NEAREST)
-    img_bgr = img_bgr_resized
 
     pos_scr = scr_bgr[:, :, 1] == 255
     neg_scr = scr_bgr[:, :, 2] == 255
@@ -460,6 +417,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
     neg_count = float(((t <= 0.5) * (m > 0.5)).sum().item())
     pos_weight = (neg_count + 1.0) / (pos_count + 1.0)
+    pos_weight = np.clip(pos_weight, 1.0, 20.0)
 
     model.train()
 
@@ -467,7 +425,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     for it in pbar:
         opt.zero_grad()
 
-        xb, tb, mb, _ = augment_tensors(x, t, m, e, aug_prob=0.8)
+        xb, tb, mb, _ = augment_tensors(x, t, m, e, aug_prob=1.0)
 
 
         logits = model(xb)
@@ -486,14 +444,15 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
             "loss_dice": f"{loss_dice.item():.4f}",
         })
 
-        # if (it + 1) % 100 == 0 or it == 0:
-        #     model.eval()
-        #     with torch.no_grad():
-        #         prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
-        #     model.train()
-        #     a = prob_tmp[:, :, np.newaxis].astype(np.float32)
-        #     white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
-        #     blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+        if (it + 1) % 100 == 0 or it == 0:
+            model.eval()
+            with torch.no_grad():
+                prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+            model.train()
+            a = prob_tmp[:, :, np.newaxis].astype(np.float32)
+            white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
+            blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+            cv2.imwrite(f"debug_out_{it}.png", blended.astype(np.uint8))
 
     model.eval()
     with torch.no_grad():
@@ -506,279 +465,3 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
         out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
     cv2.imwrite("debug_out_resized.png", out)
     return out
-        
-
-
-# -----------------------------
-# Main
-# -----------------------------
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--img", default="images/umika.png")
-    ap.add_argument("--scribble", default="images/umika_scr.png")
-    ap.add_argument("--out", default="line_on_white.png")
-    ap.add_argument("--out_mask", default="mask.png")
-    ap.add_argument("--out_alpha", default="line_alpha.png", help="probを透明度として元画像から線画を抽出したPNG（BGRA）")
-    ap.add_argument("--out_pos_scr_refined", default="scribble.png", help="Optional path to save an overlay visualizing refined positive scribble pixels.")
-    ap.add_argument("--out_prob", default="prob.png", help="Optional path to save the probability map as an 8-bit grayscale image.")
-    ap.add_argument("--out_prob_npy", default="", help="Optional path to save the probability map as float32 .npy.")
-    ap.add_argument("--max_size", type=int, default=5000)
-    ap.add_argument("--iters", type=int, default=1200)
-    ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--base_ch", type=int, default=32)
-    ap.add_argument("--thr", type=float, default=0.65, help="Used when --thr_method=fixed")
-    ap.add_argument("--thr_method", choices=["fixed", "otsu", "percentile", "none"], default="otsu")
-    ap.add_argument("--thr_percentile", type=float, default=92.0)
-    ap.add_argument("--use_clahe", action="store_true")
-    ap.add_argument("--clahe_clip", type=float, default=2.0)
-    ap.add_argument("--clahe_grid", type=int, default=8)
-    ap.add_argument("--use_aug", action="store_true")
-    ap.add_argument("--aug_prob", type=float, default=0.8)
-    ap.add_argument("--use_bg_scribble", action="store_true", help="Treat black scribble pixels as background labels.")
-    ap.add_argument("--bg_scribble_black_thr", type=int, default=10)
-    ap.add_argument("--w_bce", type=float, default=1.0)
-    ap.add_argument("--w_dice", type=float, default=0.8)
-    ap.add_argument("--w_focal", type=float, default=0.6)
-    ap.add_argument("--w_tv", type=float, default=0.01)
-    ap.add_argument("--w_edge", type=float, default=0.10)
-    ap.add_argument("--focal_alpha", type=float, default=0.75)
-    ap.add_argument("--focal_gamma", type=float, default=2.0)
-    ap.add_argument("--pos_weight", type=float, default=0.0, help="<=0 to auto-estimate from labels")
-    ap.add_argument("--lr_patience", type=int, default=80)
-    ap.add_argument("--lr_factor", type=float, default=0.6)
-    ap.add_argument("--early_stop_patience", type=int, default=220)
-    ap.add_argument("--early_stop_min_delta", type=float, default=1e-4)
-    ap.add_argument("--min_area", type=int, default=5)
-    ap.add_argument("--min_area_ratio", type=float, default=1e-5)
-    ap.add_argument("--bg_edge_thr", type=float, default=0.10, help="Lower -> stricter auto background sampling.")
-    ap.add_argument("--scribble_line_adaptive_block", type=int, default=31)
-    ap.add_argument("--scribble_line_adaptive_c", type=int, default=8)
-    ap.add_argument("--scribble_line_edge_thr", type=float, default=0.08)
-    ap.add_argument("--open_ksize", type=int, default=0)
-    ap.add_argument("--close_ksize", type=int, default=0)
-    ap.add_argument("--debug_dir", default="debug", help="デバッグ画像の保存先ディレクトリ（空文字で無効）")
-    ap.add_argument("--device", default="cpu")
-    args = ap.parse_args()
-
-    img_bgr = load_image(args.img)
-    orig_image = img_bgr.copy()
-    orig_h, orig_w = img_bgr.shape[:2]
-    scr_bgr = load_image(args.scribble)
-
-    # resize
-    img_bgr, _ = resize_to_max(img_bgr, args.max_size)
-    scr_bgr = cv2.resize(scr_bgr, (img_bgr.shape[1], img_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
-    if args.use_clahe:
-        img_bgr = apply_clahe_bgr(img_bgr, clip_limit=args.clahe_clip, tile_grid=args.clahe_grid)
-
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    img_rgb = normalize_image(img_rgb)
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-    # Create partial labels: 1=line, 0=bg, -1=unknown
-    scr_mask = make_scribble_label_mask(scr_bgr)
-    pos_scr = scr_mask == 1 # line scribble
-    neg_scr = scr_mask == 0 # bg scribble
-
-    # extract line pixels in scribble
-    edge = compute_edge_map(img_gray)
-    pos_scr_refined = extract_line_pixels_in_scribble(
-        img_bgr,
-        pos_scr,
-    )
-    pos_scr_orig = pos_scr.copy()
-    pos_scr = pos_scr_refined
-    mask_u8 = (pos_scr.astype(np.uint8) * 255)
-    cv2.imwrite(args.out_pos_scr_refined, mask_u8)
-
-
-    # Auto-generate background samples from positive scribble only.
-    # Use outside of dilated scribble as BG, without edge-based filtering.
-    kernel = np.ones((7, 7), np.uint8)
-    dil = cv2.dilate(pos_scr.astype(np.uint8), kernel, iterations=2)
-    cv2.imwrite("dil.png", dil.astype(np.uint8) * 255)
-    ring = (dil == 1) & (~pos_scr)
-
-    # Use a conservative BG: ring pixels with low gradient are likely non-line interior
-    bg_auto = ring & (edge < args.bg_edge_thr)
-    cv2.imwrite("bg_auto.png", bg_auto.astype(np.uint8) * 255)
-    bg = neg_scr | bg_auto
-
-    # Build target + labeled mask
-    # target: 1 for line scribble, 0 for bg scribble/bg auto, else unused
-    target = np.zeros_like(img_gray, dtype=np.float32)
-    labeled = np.zeros_like(img_gray, dtype=np.float32)
-    target[pos_scr] = 1.0
-    target[bg] = 0.0
-    labeled[pos_scr] = 1.0
-    labeled[bg] = 1.0
-
-    # Torch tensors
-    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(args.device)  # 1x3xHxW
-    t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(args.device)        # 1x1xHxW
-    m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to(args.device)       # 1x1xHxW
-    e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(args.device)          # 1x1xHxW
-
-    model = UNet(in_ch=3, base_ch=args.base_ch).to(args.device)
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=0.5, patience=200
-    )
-
-    # Auto class-balance for sparse lines
-    pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
-    neg_count = float(((t <= 0.5) * (m > 0.5)).sum().item())
-    pos_weight = (neg_count + 1.0) / (pos_count + 1.0)
-    # pos_weight = float(np.clip(pos_weight, 1.0, 1000.0))
-
-    model.train()
-    # best_loss = float("inf")
-    # bad_iters = 0
-    pbar = tqdm(range(args.iters), desc="UNet Training")
-    for it in pbar:
-        opt.zero_grad()
-
-        xb, tb, mb, eb = x, t, m, e
-        if args.use_aug:
-            xb, tb, mb, eb = augment_tensors(xb, tb, mb, eb, aug_prob=args.aug_prob)
-
-        logits = model(xb)
-        prob = torch.sigmoid(logits)
-
-        loss_bce = masked_bce_with_logits(logits, tb, mb, pos_weight=pos_weight)
-        loss_dice = masked_dice_loss(prob, tb, mb)
-        # loss_focal = masked_focal_with_logits(
-        #     logits, tb, mb, alpha=args.focal_alpha, gamma=args.focal_gamma
-        # )
-        # loss_tv = total_variation(prob)
-        # loss_ed = edge_alignment_loss(prob, eb)
-
-        loss = (
-            args.w_bce * loss_bce
-            + loss_dice
-            # + args.w_focal * loss_focal
-            # + args.w_tv * loss_tv
-            # + args.w_edge * loss_ed
-        )
-        loss.backward()
-        opt.step()
-        scheduler.step(loss.item())
-
-        # cur_loss = float(loss.item())
-        # if cur_loss < (best_loss - args.early_stop_min_delta):
-        #     best_loss = cur_loss
-        #     bad_iters = 0
-        # else:
-        #     bad_iters += 1
-        # if bad_iters >= args.early_stop_patience:
-        #     print(f"[INFO] Early stop at iter {it+1} (best_loss={best_loss:.4f})")
-        #     break
-
-        pbar.set_postfix({
-            "loss_bce": f"{loss_bce.item():.4f}",
-            "loss_dice": f"{loss_dice.item():.4f}",
-        })
-
-        if (it + 1) % 100 == 0 or it == 0:
-            # lr_now = opt.param_groups[0]["lr"]
-            # print(
-                # f"iter {it+1:4d}/{args.iters}"
-            #     f"bce {loss_bce.item():.4f} dice {loss_dice.item():.4f} focal {loss_focal.item():.4f} "
-            #     f"tv {loss_tv.item():.4f} edge {loss_ed.item():.4f} | total {loss.item():.4f} | lr {lr_now:.2e}"
-            # )
-            # # 途中経過のprobを保存
-            model.eval()
-            with torch.no_grad():
-                prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
-            model.train()
-            # グレースケールprobを保存
-            prob_tmp_u8 = np.clip(prob_tmp * 255.0, 0, 255).astype(np.uint8)
-            cv2.imwrite(f"prob_iter{it+1:04d}.png", prob_tmp_u8)
-            # 白背景合成出力（probを透明度として元画像から線画を抽出）
-            if args.out_alpha:
-                prob_tmp_resized = cv2.resize(prob_tmp, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-                a = prob_tmp_resized[:, :, np.newaxis].astype(np.float32)
-                orig_bgr = orig_image if orig_image.shape[:2] == (orig_h, orig_w) else cv2.resize(orig_image, (orig_w, orig_h))
-                white = np.ones_like(orig_bgr, dtype=np.float32) * 255.0
-                blended = orig_bgr.astype(np.float32) * a + white * (1.0 - a)
-                cv2.imwrite(f"line_alpha_iter{it+1:04d}.png", blended.astype(np.uint8))
-
-    model.eval()
-    with torch.no_grad():
-        logits = model(x)
-        prob = torch.sigmoid(logits).squeeze().cpu().numpy()
-
-    # Optionally save raw probability map (before thresholding/postprocess).
-    prob_out = prob
-    if prob_out.shape[:2] != (orig_h, orig_w):
-        prob_out = cv2.resize(prob_out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-    if args.out_prob:
-        prob_u8 = np.clip(prob_out * 255.0, 0, 255).astype(np.uint8)
-        cv2.imwrite(args.out_prob, prob_u8)
-    if args.out_prob_npy:
-        np.save(args.out_prob_npy, prob_out.astype(np.float32))
-
-    # Threshold -> binary
-    if args.thr_method == "none":
-        bin01 = prob.astype(np.uint8) * 255
-        thr_val = 0.0
-    elif args.thr_method == "fixed":
-        thr_val = float(args.thr)
-        bin01 = (prob >= thr_val).astype(np.uint8) * 255
-    elif args.thr_method == "otsu":
-        prob_u8 = np.clip(prob * 255.0, 0, 255).astype(np.uint8)
-        _, bin01 = cv2.threshold(prob_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        thr_val = float(_ / 255.0)
-    else:
-        p = float(np.clip(args.thr_percentile, 0.0, 100.0))
-        thr_val = float(np.percentile(prob, p))
-        bin01 = (prob >= thr_val).astype(np.uint8) * 255
-
-    # Post-process: morphology + remove tiny noise, then thin (optional)
-    if args.open_ksize > 1:
-        k = np.ones((args.open_ksize, args.open_ksize), np.uint8)
-        bin01 = cv2.morphologyEx(bin01, cv2.MORPH_OPEN, k, iterations=1)
-    if args.close_ksize > 1:
-        k = np.ones((args.close_ksize, args.close_ksize), np.uint8)
-        bin01 = cv2.morphologyEx(bin01, cv2.MORPH_CLOSE, k, iterations=1)
-
-    # Noise removal
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((bin01 > 0).astype(np.uint8), connectivity=8)
-    cleaned = np.zeros_like(bin01)
-    area_thr = max(int(args.min_area), int(args.min_area_ratio * bin01.shape[0] * bin01.shape[1]))
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= area_thr:
-            cleaned[labels == i] = 255
-
-    thinned = binarize_and_thin(cleaned)
-
-    # Restore mask to input resolution if resized for training/inference.
-    if thinned.shape[:2] != (orig_h, orig_w):
-        thinned = cv2.resize(thinned, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-
-    # Apply mask to original image over a white background.
-    # mask=255 -> keep original pixel, mask=0 -> white.
-    out_img = np.full_like(orig_image, 255, dtype=np.uint8)
-    keep = thinned > 0
-    out_img[keep] = orig_image[keep]
-
-    cv2.imwrite(args.out, out_img)
-    if args.out_mask:
-        thinned = cv2.bitwise_not(thinned)
-        cv2.imwrite(args.out_mask, thinned)
-
-    # probを透明度として白背景に合成（元画像から線画を抽出）
-    if args.out_alpha:
-        a = prob_out[:, :, np.newaxis].astype(np.float32)
-        orig_bgr = cv2.resize(orig_image, (orig_w, orig_h)) if orig_image.shape[:2] != (orig_h, orig_w) else orig_image
-        white = np.ones_like(orig_bgr, dtype=np.float32) * 255.0
-        blended = orig_bgr.astype(np.float32) * a + white * (1.0 - a)
-        cv2.imwrite(args.out_alpha, blended.astype(np.uint8))
-        print(f"[OK] Saved alpha: {args.out_alpha}")
-
-    print(f"[INFO] threshold={thr_val:.4f} ({args.thr_method}) | min_area={area_thr}")
-    print(f"[OK] Saved: {args.out}")
-
-if __name__ == "__main__":
-    main()
