@@ -10,6 +10,9 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: src/python/dist/server.exe
+    to: server.exe
 win:
   executableName: ssle
 nsis:
