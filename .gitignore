@@ -4,3 +4,7 @@ out
 .DS_Store
 .eslintcache
 *.log*
+build
+__pycache__
+*.spec
+temp
