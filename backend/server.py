@@ -136,7 +136,7 @@ async def api_predict_line(
     # img_arr = save_image_upload(image, img_path, max_size=max_size, interpolation=cv2.INTER_AREA)
     # save_image_upload(scribble, scr_path, max_size=max_size, interpolation=cv2.INTER_NEAREST)
 
-    predicted_line = predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size)
+    predicted_line = predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size=max_size)
 
     cv2.imwrite(line_path, predicted_line)
 

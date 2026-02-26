@@ -520,7 +520,7 @@ def apply_frangi_percentile(frangi_path, percentile, img_path=None, *, two_sided
     return blended
 
 
-def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_size=5000):
+def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, progress_bar=None, max_size=5000):
     img_bgr = cv2.imread(img_path)
     scr_bgr = cv2.imread(scr_path, -1)
     orig_h, orig_w = img_bgr.shape[:2]
@@ -529,7 +529,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
         scr_bgr[index] = [0, 0, 0, 0]
         scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
 
-    cv2.imwrite("debug_scr.png", scr_bgr)
+    # cv2.imwrite("debug_scr.png", scr_bgr)
     refined_scr_bgr = cv2.imread(refined_scr_path)
     refined_scr_bgr = cv2.LUT(refined_scr_bgr, 255-np.arange(256)).astype(np.uint8)
 
@@ -537,12 +537,12 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     pos_scr = scr_bgr[:, :, 1] == 255
     neg_scr = scr_bgr[:, :, 2] == 255
     refined_pos_scr = refined_scr_bgr[:, :, 0] == 255
-    cv2.imwrite("debug_refined_pos_scr.png", refined_pos_scr.astype(np.uint8)*255)
+    # cv2.imwrite("debug_refined_pos_scr.png", refined_pos_scr.astype(np.uint8)*255)
     kernel = np.ones((7, 7), np.uint8)
     dil = cv2.dilate(refined_pos_scr.astype(np.uint8), kernel, iterations=2)
-    cv2.imwrite("dil.png", dil.astype(np.uint8) * 255)
+    # cv2.imwrite("dil.png", dil.astype(np.uint8) * 255)
     ring = (dil == 1) & (refined_pos_scr == 0)
-    cv2.imwrite("ring.png", ring.astype(np.uint8) * 255)
+    # cv2.imwrite("ring.png", ring.astype(np.uint8) * 255)
 
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     img_rgb = normalize_image(img_rgb)
@@ -551,7 +551,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     edge = compute_edge_map(img_gray)
     bg_auto = ring
     bg = neg_scr | bg_auto
-    cv2.imwrite("debug_bg.png", bg.astype(np.uint8)*255)
+    # cv2.imwrite("debug_bg.png", bg.astype(np.uint8)*255)
 
     target = np.zeros_like(img_gray, dtype=np.float32)
     labeled = np.zeros_like(img_gray, dtype=np.float32)
@@ -600,6 +600,9 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
             "loss_bce": f"{loss_bce.item():.4f}",
             "loss_dice": f"{loss_dice.item():.4f}",
         })
+        
+        if progress_bar is not None:
+            progress_bar(it + 1, iters, loss.item())
 
         if (it + 1) % 100 == 0 or it == 0:
             model.eval()
@@ -609,7 +612,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
             a = prob_tmp[:, :, np.newaxis].astype(np.float32)
             white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
             blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
-            cv2.imwrite(f"debug_out_{it}.png", blended.astype(np.uint8))
+            # cv2.imwrite(f"debug_out_{it}.png", blended.astype(np.uint8))
 
     model.eval()
     with torch.no_grad():
@@ -620,5 +623,5 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, max_si
     out = blended.astype(np.uint8)
     if out.shape[:2] != (orig_h, orig_w):
         out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-    cv2.imwrite("debug_out_resized.png", out)
+    # cv2.imwrite("debug_out_resized.png", out)
     return out
