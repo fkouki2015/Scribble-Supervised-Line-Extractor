@@ -3,6 +3,18 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
+import { spawn } from 'child_process'
+
+let serverProcess = null
+
+function getPythonPath() {
+  if (is.dev) {
+    // 開発時: src/python/server.py を直接 python で実行
+    return null  // 後述
+  }
+  // 本番: asar 展開済みの exe
+  return join(process.resourcesPath, 'server.exe')
+}
 
 function createWindow() {
   // Create the browser window.
@@ -40,6 +52,22 @@ function createWindow() {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  const pythonPath = getPythonPath()
+  if (pythonPath) {
+    // 本番: exe を直接実行 (cwd を resourcesPath に設定して temp/ を正しく作成)
+    serverProcess = spawn(pythonPath, [], { cwd: process.resourcesPath })
+    serverProcess.stdout.on('data', (data) => console.log('[Python]', data.toString()))
+    serverProcess.stderr.on('data', (data) => console.error('[Python ERROR]', data.toString()))
+    serverProcess.on('close', (code) => console.log('[Python] exited with code', code))
+  } else {
+    // 開発: python コマンドで src/python/server.py を実行
+    const serverDir = join(__dirname, '../../src/python')
+    serverProcess = spawn('python', [join(serverDir, 'server.py')], { cwd: serverDir })
+    serverProcess.stdout.on('data', (data) => console.log('[Python]', data.toString()))
+    serverProcess.stderr.on('data', (data) => console.error('[Python ERROR]', data.toString()))
+    serverProcess.on('close', (code) => console.log('[Python] exited with code', code))
+  }
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -66,6 +94,7 @@ app.whenReady().then(() => {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
+  if (serverProcess) serverProcess.kill()  // サーバープロセスを終了
   if (process.platform !== 'darwin') {
     app.quit()
   }
