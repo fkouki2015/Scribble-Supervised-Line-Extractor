@@ -15,7 +15,7 @@ img_u8 = None
 scr_u8 = None
 frangi_u8 = None
 refined_scr_u8 = None
-progress_data = {"it": 0, "loss": 0}
+progress_data = {"it": 0, "iters": 0, "loss": 0}
 cancel_flag = threading.Event()
 
 @app.route("/api/cancel_prediction", methods=["POST"])
@@ -142,11 +142,12 @@ def api_predict_line():
         return {"error": "画像がありません．"}, 400
 
     cancel_flag.clear()
-    progress_data = {"it": 0, "loss": 0}
+    progress_data = {"it": 0, "iters": 0, "loss": 0}
 
-    def progress_bar(it, loss):
+    def progress_bar(it, iters, loss):
         global progress_data
         progress_data["it"] = it
+        progress_data["iters"] = iters
         progress_data["loss"] = loss
 
     # 全体線画の生成

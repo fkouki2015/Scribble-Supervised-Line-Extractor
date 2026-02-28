@@ -551,8 +551,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
 
     model.train()
 
-    pbar = tqdm(range(iters), desc="UNet Training")
-    for it in pbar:
+    for it in range(iters):
         if cancel_flag is not None and cancel_flag.is_set():
             break
 
@@ -571,14 +570,9 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
         loss.backward()
         opt.step()
         scheduler.step(loss.item())
-
-        pbar.set_postfix({
-            "loss_bce": f"{loss_bce.item():.4f}",
-            "loss_dice": f"{loss_dice.item():.4f}",
-        })
         
         if progress_bar is not None:
-            progress_bar(it + 1, loss.item())
+            progress_bar(it + 1, iters, loss.item())
 
         if (it + 1) % 100 == 0 or it == 0:
             model.eval()
