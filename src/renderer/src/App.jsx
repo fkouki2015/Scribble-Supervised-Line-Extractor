@@ -1,47 +1,47 @@
-// frontend/src/App.jsx
 import React, { useEffect, useRef, useState } from "react";
 
 export default function App() {
-  const [method, setMethod] = useState("frangi"); // 'frangi' | 'refine'
+  // UI上の状態
   const [imgFile, setImgFile] = useState(null);
-  const [imgUrl, setImgUrl] = useState("");
-  const [thr, setThr] = useState(128);
+  const [method, setMethod] = useState("frangi");
+  const [useClahe, setUseClahe] = useState(false);
+  const [claheClip, setClaheClip] = useState(2.0);
+  const [claheGrid, setClaheGrid] = useState(8);
+  const [maxSize, setMaxSize] = useState(2000);
   const [lineWidth, setLineWidth] = useState(30);
+  const [penType, setPenType] = useState("scribble");
+  const [scribbleColor, setScribbleColor] = useState("rgb(0,255,0)");
+  const [lr, setLr] = useState(1e-3);
+  const [iters, setIters] = useState(400);
+  const [thr, setThr] = useState(128);
+  const [frangiPercentile, setFrangiPercentile] = useState(99);
+
+  // 画像のURL
+  const [imgUrl, setImgUrl] = useState("");
   const [probUrl, setProbUrl] = useState("");
   const [frangiOutUrl, setFrangiOutUrl] = useState("");
   const [unetOutUrl, setUnetOutUrl] = useState("");
-  const [refinedReady, setRefinedReady] = useState(false);
-  const [maxSize, setMaxSize] = useState(5000);
-  const [scribbleColor, setScribbleColor] = useState("rgb(0,255,0)");
-  const [penType, setPenType] = useState("scribble");
-  const [useClahe, setUseClahe] = useState( false);
-  const [claheClip, setClaheClip] = useState(2.0);
-  const [claheGrid, setClaheGrid] = useState(8);
-  const [lr, setLr] = useState(1e-3);
-  const [iters, setIters] = useState(700);
-  const [device, setDevice] = useState("cuda")
-  const [frangiPercentile, setFrangiPercentile] = useState(99.7);
-  const [frangiBlob, setFrangiBlob] = useState(null); // uint8 PNG blob returned by /api/compute_frangi
-  const [unetBlob, setUnetBlob] = useState(null); // uint8 PNG blob returned by /api/refine_scribble
 
+  // DOM要素への参照
   const imgRef = useRef(null);
   const scribbleRef = useRef(null);
   const outRef = useRef(null);
-  const refineScribbleFn = useRef(null); // Ctrl+Z から最新の refineScribble を呼ぶための ref
 
+  // 描画状態
   const [drawing, setDrawing] = useState(false);
   const last = useRef(null); // {x:number, y:number}
-  const debounceTimer = useRef(null);
   const [cursorPos, setCursorPos] = useState(null); // {x:number, y:number} | null
-
-  // --- Undo (Ctrl+Z) 履歴管理 ---
+  // Undo用履歴管理
   const [history, setHistory] = useState([]);
+  const refineScribbleFn = useRef(null);
 
+  // 描画状態保存
   const saveState = () => {
-    const sc = scribbleRef.current;
-    if (!sc) return;
-    const ctx = sc.getContext("2d");
-    const data = ctx.getImageData(0, 0, sc.width, sc.height);
+    const scr = scribbleRef.current;
+    // スクリブルがないときは何もしない
+    if (!scr) return;
+    const ctx = scr.getContext("2d");
+    const data = ctx.getImageData(0, 0, scr.width, scr.height);
     setHistory((prev) => {
       const newHistory = [...prev, data];
       if (newHistory.length > 30) newHistory.shift(); // 履歴は直近30回まで
@@ -49,87 +49,36 @@ export default function App() {
     });
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      // ユーザーが Input や Textarea にフォーカスしている場合はネイティブの Undo に任せる
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        setHistory((prev) => {
-          if (prev.length === 0) return prev; // 何も保存されていなければ何もしない
-          const newHistory = [...prev];
-          const lastState = newHistory.pop();
-          const sc = scribbleRef.current;
-          if (sc) {
-            sc.getContext("2d").putImageData(lastState, 0, 0);
-            refineScribbleFn.current?.();
-          }
-          return newHistory;
-        });
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-
-  useEffect(() => {
-    const img = imgRef.current;
-    const sc = scribbleRef.current;
-    const out = outRef.current;
-    if (!img || !sc || !out) return;
-
-    const onLoad = () => {
-      sc.width = img.naturalWidth;
-      sc.height = img.naturalHeight;
-      out.width = img.naturalWidth;
-      out.height = img.naturalHeight;
-
-      // スクリブル初期化
-      const ctx = sc.getContext("2d");
-      ctx.clearRect(0, 0, sc.width, sc.height);
-
-      // 出力初期化
-      const octx = out.getContext("2d");
-      octx.clearRect(0, 0, out.width, out.height);
-
-      setHistory([]); // 画像読み込み時は履歴リセット
-    };
-
-    img.addEventListener("load", onLoad);
-    return () => img.removeEventListener("load", onLoad);
-  }, [imgUrl]);
-
-  const onUpload = (f) => {
-    setImgFile(f);
-    const u = URL.createObjectURL(f);
-    setImgUrl(u);
+  // 画像アップロード時の処理
+  const onUpload = (file) => {
+    setImgFile(file);
+    const url = URL.createObjectURL(file);
+    setImgUrl(url);
     setProbUrl("");
     setFrangiOutUrl("");
     setUnetOutUrl("");
-    setFrangiBlob(null);
-    setRefinedReady(false);
   };
 
+  // スクリブル描画
   const drawLine = (x, y) => {
-    const sc = scribbleRef.current;
-    if (!sc) return;
-    const ctx = sc.getContext("2d");
+    const scr = scribbleRef.current;
+    if (!scr) return;
+    const ctx = scr.getContext("2d");
 
-    // キャンバスの表示スケールを計算して線の太さを補正
-    const rect = sc.getBoundingClientRect();
-    const displayScale = rect.width / sc.width;
+    // スケール補正
+    const rect = scr.getBoundingClientRect();
+    const displayScale = rect.width / scr.width;
 
+    // 描画設定
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.globalCompositeOperation = penType === "scribble" ? "source-over" : "destination-out";
     ctx.strokeStyle = penType === "scribble" ? scribbleColor : "rgba(255,255,255,1)";
-    ctx.lineWidth = lineWidth / displayScale; // 画面上のピクセルサイズに合わせる
+    ctx.lineWidth = lineWidth / displayScale;
     ctx.beginPath();
 
-    const p = last.current;
-    if (p) ctx.moveTo(p.x, p.y);
+    const lastPoint = last.current;
+    if (lastPoint) ctx.moveTo(lastPoint.x, lastPoint.y);
     else ctx.moveTo(x, y);
 
     ctx.lineTo(x, y);
@@ -138,14 +87,15 @@ export default function App() {
     last.current = { x, y };
   };
 
+  // カーソル位置取得
   const getPos = (e) => {
-    const sc = scribbleRef.current;
-    if (!sc) return { x: 0, y: 0 };
+    const scr = scribbleRef.current;
+    if (!scr) return { x: 0, y: 0 };
 
-    const rect = sc.getBoundingClientRect();
-    // 表示サイズと実解像度が違うのでスケール変換
-    const sx = sc.width / rect.width;
-    const sy = sc.height / rect.height;
+    // スケール補正
+    const rect = scr.getBoundingClientRect();
+    const sx = scr.width / rect.width;
+    const sy = scr.height / rect.height;
 
     return {
       x: (e.clientX - rect.left) * sx,
@@ -153,19 +103,23 @@ export default function App() {
     };
   };
 
+  // スクリブル消去
   const clearScribble = () => {
-    saveState(); // 消去前にも履歴を保存
-    const sc = scribbleRef.current;
-    // const out = outRef.current;
-    if (sc) sc.getContext("2d").clearRect(0, 0, sc.width, sc.height);
-    // if (out) out.getContext("2d").clearRect(0, 0, out.width, out.height);
-    setProbUrl("");
-    setRefinedReady(false);
+    // 履歴を保存
+    saveState();
+    const scr = scribbleRef.current;
+    if (scr) scr.getContext("2d").clearRect(0, 0, scr.width, scr.height);
+    const out = outRef.current;
+    if (out) out.getContext("2d").clearRect(0, 0, out.width, out.height);
+    setUnetOutUrl(null);
   };
 
-  // --- Step 1: Frangi応答を計算してサーバー側にキャッシュ（重い処理、1回だけ） ---
+  // Frangi応答を計算+パーセンタイルを適用
   const computeFrangi = async () => {
-    if (!imgFile) return;
+    if (!imgFile) {
+      alert("画像がありません．");
+      return;
+    }
 
     const formData = new FormData();
     formData.append("image", imgFile);
@@ -173,24 +127,22 @@ export default function App() {
     formData.append("clahe_clip", claheClip);
     formData.append("clahe_grid", claheGrid);
     formData.append("max_size", maxSize);
-
     const res = await fetch("http://127.0.0.1:8000/api/compute_frangi", {
       method: "POST",
       body: formData,
     });
     if (!res.ok) {
-      alert("Frangi計算に失敗しました");
+      const data = await res.json();
+      alert(data.error);
       return;
     }
-    const newFrangiBlob = await res.blob();
-    setFrangiBlob(newFrangiBlob);
 
-    // 初回のpercentile適用（state更新を待たず、ローカルblobを使う）
-    await _applyPercentile(newFrangiBlob, frangiPercentile);
+    // 初回のpercentile適用
+    await _applyPercentile(frangiPercentile);
   };
 
-  const _applyPercentile = async (fBlob, p) => {
-    if (!fBlob) return;
+  // Frangi応答のパーセンタイルを適用
+  const _applyPercentile = async (p) => {
     const formData = new FormData();
     formData.append("percentile", p);
     const res = await fetch("http://127.0.0.1:8000/api/apply_frangi_percentile", {
@@ -198,29 +150,37 @@ export default function App() {
       body: formData,
     });
     if (!res.ok) {
-      alert("Percentile適用に失敗しました");
+      const data = await res.json();
+      alert(data.error);
       return;
     }
     const url = URL.createObjectURL(await res.blob());
     setFrangiOutUrl(url);
   };
 
-  // --- Step 2: スライダー用 debounce ラッパー ---
+  // Frangi応答のパーセンタイルを適用（スライダー用）
   const applyPercentile = (p) => {
-    if (!frangiBlob) return;
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(async () => {
-      await _applyPercentile(frangiBlob, p);
-    }, 150);
+    if (!frangiOutUrl) {
+      alert("Frangi応答がありません．");
+      return;
+    }
+    _applyPercentile(p);
   };
 
 
-  // --- Method B: refine scribble directly (pos/neg scribble) ---
+  // スクリブルの線画化（自動のみ）
   const refineScribble = async () => {
-    const sc = scribbleRef.current;
-    if (!sc || !imgFile) return;
+    const scr = scribbleRef.current;
+    if (!scr) {
+      alert("スクリブルがありません．");
+      return;
+    }
+    if (!imgFile) {
+      alert("画像がありません．");
+      return;
+    }
 
-    const blob = await new Promise((resolve) => sc.toBlob((b) => resolve(b), "image/png"));
+    const blob = await new Promise((resolve) => scr.toBlob((b) => resolve(b), "image/png"));
     if (!blob) {
       alert("スクリブル画像の取得に失敗しました");
       return;
@@ -233,62 +193,127 @@ export default function App() {
     formData.append("clahe_clip", claheClip);
     formData.append("clahe_grid", claheGrid);
     formData.append("max_size", maxSize);
-
     const res = await fetch("http://127.0.0.1:8000/api/refine_scribble", {
       method: "POST",
       body: formData,
     });
     if (!res.ok) {
-      alert("Refine Scribble に失敗しました");
+      const data = await res.json();
+      alert(data.error);
       return;
     }
 
-    const url = URL.createObjectURL(await res.blob());
+    const refinedBlob = await res.blob();
+    const url = URL.createObjectURL(refinedBlob);
     setUnetOutUrl(url);
-    setRefinedReady(true);
   };
-  // 毎レンダーで最新クロージャを ref に保持（Ctrl+Z ハンドラから呼ぶため）
+  // 最新の関数を保持
   refineScribbleFn.current = refineScribble;
 
-
-
-
+  // 全体の線画を予測
   const predict = async () => {
-    const sc = scribbleRef.current;
-    if (!imgFile || !sc) return;
+    const scr = scribbleRef.current;
+    if (!imgFile) {
+      alert("画像がありません．");
+      return;
+    }
+    if (!scr) {
+      alert("スクリブルがありません．");
+      return;
+    }
 
     const blob_scr = await new Promise((resolve) =>
-      sc.toBlob((b) => resolve(b), "image/png")
+      scr.toBlob((b) => resolve(b), "image/png")
     );
 
     if (!blob_scr) {
-      alert("Failed to capture scribble");
+      alert("スクリブル画像の取得に失敗しました");
       return;
     }
 
     const formData = new FormData();
     formData.append("lr", lr);
     formData.append("iters", iters);
-    formData.append("device", device)
     formData.append("max_size", maxSize);
-
-    // CRAのproxyを使うなら "/api/predict" のように相対パス推奨
     const res = await fetch("http://127.0.0.1:8000/api/predict_line", {
       method: "POST",
       body: formData,
     });
 
     if (!res.ok) {
-      alert("predict failed");
+      const data = await res.json();
+      alert(data.error);
       return;
     }
 
-    const outBlob = await res.blob(); // prob png
+    const outBlob = await res.blob();
     const url = URL.createObjectURL(outBlob);
     setUnetOutUrl(url);
   };
 
-  // prob png を out canvas にそのまま表示（カラー）
+
+
+  // 画面更新時，キーイベントリスナーを設定
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // ユーザーが Input や Textarea にフォーカスしている場合はネイティブの Undo に任せる
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        setHistory((prev) => {
+          if (prev.length === 0) return prev; // 何も保存されていなければ何もしない
+          const newHistory = [...prev];
+          const lastState = newHistory.pop();
+          const scr = scribbleRef.current;
+          if (scr) {
+            scr.getContext("2d").putImageData(lastState, 0, 0);
+            if (refineScribbleFn.current !== null) {
+              refineScribbleFn.current();
+            }
+          }
+          return newHistory;
+        });
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // 画像読み込み時の処理
+  useEffect(() => {
+    const img = imgRef.current;
+    const scr = scribbleRef.current;
+    const out = outRef.current;
+    // 画像がなければ何もしない
+    if (!img || !scr || !out) return;
+
+    const onLoad = () => {
+      scr.width = img.naturalWidth;
+      scr.height = img.naturalHeight;
+      out.width = img.naturalWidth;
+      out.height = img.naturalHeight;
+
+      // スクリブル初期化
+      const ctx = scr.getContext("2d");
+      ctx.clearRect(0, 0, scr.width, scr.height);
+
+      // 出力初期化
+      const octx = out.getContext("2d");
+      octx.clearRect(0, 0, out.width, out.height);
+
+      // 履歴リセット
+      setHistory([]);
+    };
+
+    // 読み込まれたときにonLoadを実行
+    img.addEventListener("load", onLoad);
+    return () => img.removeEventListener("load", onLoad);
+  }, [imgUrl]);
+
+
+  // probをout canvasに表示
   useEffect(() => {
     const out = outRef.current;
     if (!out) return;
@@ -300,11 +325,9 @@ export default function App() {
       return;
     }
 
-    let cancelled = false;
-
+    // probUrl が変わったときprobを表示
     const img = new Image();
     img.onload = () => {
-      if (cancelled) return;
       out.width = img.naturalWidth;
       out.height = img.naturalHeight;
       const ctx = out.getContext("2d");
@@ -313,9 +336,6 @@ export default function App() {
     };
     img.src = probUrl;
 
-    return () => {
-      cancelled = true;
-    };
   }, [probUrl]);
 
 
@@ -326,12 +346,14 @@ export default function App() {
       return;
     }
 
+    // 画像データを取得
     const w = src.width;
     const h = src.height;
     const sctx = src.getContext("2d");
     const srcData = sctx.getImageData(0, 0, w, h);
     const d = srcData.data;
 
+    // アルファ付きキャンバスを作成
     const dstCanvas = document.createElement("canvas");
     dstCanvas.width = w;
     dstCanvas.height = h;
@@ -339,6 +361,7 @@ export default function App() {
     const out = dctx.createImageData(w, h);
     const o = out.data;
 
+    // probをalphaに変換
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i];
       const g = d[i + 1];
@@ -352,12 +375,11 @@ export default function App() {
       o[i + 2] = b;
       o[i + 3] = a;
     }
-
     dctx.putImageData(out, 0, 0);
 
     const blob = await new Promise((resolve) => dstCanvas.toBlob(resolve, "image/png"));
     if (!blob) {
-      alert("PNGの生成に失敗しました");
+      alert("画像の保存に失敗しました．");
       return;
     }
 
@@ -371,14 +393,17 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  // frangiモードのときはcursorPosをnullにする
   useEffect(() => {
     if (method === "frangi") setCursorPos(null);
   }, [method]);
 
+  // methodが変わったらprobUrlを更新
   useEffect(() => {
     setProbUrl(method === "frangi" ? frangiOutUrl : unetOutUrl);
   }, [method, frangiOutUrl, unetOutUrl]);
 
+  // frangiモードのときは描画を無効にする
   useEffect(() => {
     if (method === "frangi") {
       setDrawing(false);
@@ -402,15 +427,15 @@ export default function App() {
         boxSizing: "border-box",
       }}
     >
-      <h2>線画抽出器</h2>
+      <h2>Scribble-Supervised Line Extractor - 線画抽出器</h2>
       <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => {
-            const f = e.target.files && e.target.files[0];
-            if (f) onUpload(f);
-          }}
-        />
+        type="file"
+        accept="image/*"
+        onChange={(e) => {
+          const f = e.target.files && e.target.files[0];
+          if (f) onUpload(f);
+        }}
+      />
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
         <span>方式:</span>
@@ -420,7 +445,7 @@ export default function App() {
         <button onClick={() => setMethod("refine")} style={{ opacity: method === "refine" ? 1 : 0.6 }}>
           U-Net（低速）
         </button>
-        <span style={{ marginLeft: 20}}></span>
+        <span style={{ marginLeft: 20 }}></span>
         {method === "refine" ? (
           <>
             <button onClick={clearScribble} disabled={!imgUrl}>スクリブル消去</button>
@@ -487,21 +512,21 @@ export default function App() {
         )}
       </div>
 
-      
+
 
 
       <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
         {method === "frangi" ? (
           <>
             <button onClick={computeFrangi} disabled={!imgUrl}>線画抽出</button>
-            <span style={{ opacity: frangiBlob ? 1 : 0.4 }}>パーセンタイル</span>
+            <span style={{ opacity: frangiOutUrl ? 1 : 0.4 }}>パーセンタイル</span>
             <input
               type="range"
               min={80}
               max={100}
               step={0.1}
               value={frangiPercentile}
-              disabled={!frangiBlob}
+              disabled={!frangiOutUrl}
               onChange={(e) => {
                 setFrangiPercentile(e.target.value);
                 applyPercentile(e.target.value);
@@ -514,7 +539,7 @@ export default function App() {
               max={100}
               step={0.1}
               value={frangiPercentile}
-              disabled={!frangiBlob}
+              disabled={!frangiOutUrl}
               onChange={(e) => {
                 setFrangiPercentile(e.target.value);
                 applyPercentile(e.target.value);
@@ -524,33 +549,33 @@ export default function App() {
           </>
         ) : (
           <>
-            <button onClick={refineScribble} disabled={!imgUrl}>スクリブル→線画</button>
-            <button onClick={predict} disabled={!imgUrl || !refinedReady}>全体の線画を生成</button>
+            <button onClick={predict} disabled={!imgUrl}>全体の線画を生成</button>
+            <button onClick={refineScribble} disabled={!imgUrl}>生成をキャンセル</button>
             <span>学習率</span>
-              <input
-                type="number"
-                min={1e-7}
-                step={1e-7}
-                value={lr}
-                onChange={(e) => setLr(e.target.value)}
-                style={{ width: 90 }}
-              />
+            <input
+              type="number"
+              min={1e-7}
+              step={1e-7}
+              value={lr}
+              onChange={(e) => setLr(e.target.value)}
+              style={{ width: 90 }}
+            />
             <span>学習ステップ数</span>
-              <input
-                type="number"
-                min={10}
-                step={100}
-                value={iters}
-                onChange={(e) => setIters(e.target.value)}
-                style={{ width: 90 }}
-              />
+            <input
+              type="number"
+              min={10}
+              step={100}
+              value={iters}
+              onChange={(e) => setIters(e.target.value)}
+              style={{ width: 90 }}
+            />
           </>
         )}
 
-          <button onClick={saveAlphaPng} disabled={!probUrl}>線画を保存</button>
+        <button onClick={saveAlphaPng}>線画を保存</button>
       </div>
 
-        
+
       {imgUrl && (
         <div style={{ display: "flex", gap: 16 }}>
           {/* 左側: 入力画像とスクリブル */}
@@ -643,7 +668,7 @@ export default function App() {
                 top: 0,
                 width: "100%",
                 height: "100%",
-                mixBlendMode: "multiply", // 白背景に対しての乗算なので線画が黒く乗る
+                mixBlendMode: "multiply", // 白背景に対して乗算
                 pointerEvents: "none",
               }}
             />
