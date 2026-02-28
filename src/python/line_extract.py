@@ -99,6 +99,16 @@ class UNet(nn.Module):
 
 
 
+def _ensure_bgr_u8(img_u8):
+    if img_u8 is None:
+        return None
+    if img_u8.ndim == 2:
+        return cv2.cvtColor(img_u8, cv2.COLOR_GRAY2BGR)
+    if img_u8.ndim == 3 and img_u8.shape[2] == 1:
+        return cv2.cvtColor(img_u8, cv2.COLOR_GRAY2BGR)
+    if img_u8.ndim == 3 and img_u8.shape[2] == 4:
+        return cv2.cvtColor(img_u8, cv2.COLOR_BGRA2BGR)
+    return img_u8
 
 
 # def compute_edge_map(gray_img):
@@ -136,6 +146,7 @@ def extract_line_pixels_in_scribble(img_u8, pos_scr, neg_scr=None, sigmas=(1, 2,
     neg_scr: 負のスクリブル(bool, HxW)
     sigmas: Frangiスケール(tuple)
     """
+    img_u8 = _ensure_bgr_u8(img_u8)
     gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
     refined = np.zeros_like(pos_scr, dtype=bool)
@@ -186,6 +197,8 @@ def extract_line_pixels_in_scribble(img_u8, pos_scr, neg_scr=None, sigmas=(1, 2,
 
 def refine_scribble(img_u8, scr_u8, use_clahe=False, clahe_clip=2.0, clahe_grid=8, max_size=5000, *, sigmas=(1, 2, 3)):
 
+    img_u8 = _ensure_bgr_u8(img_u8)
+
     # スクリブルのアルファチャンネルを黒に
     if scr_u8.ndim == 3 and scr_u8.shape[2] == 4:
         idx = np.where(scr_u8[:, :, 3] == 0)
@@ -234,11 +247,6 @@ def augment_tensors(x, t, m, aug_prob=0.8):
     """
     オーグメンテーション
     """
-    # torchvision の幾何変換は内部で view() を使う経路があり、
-    # 非連続(strided)テンソルだと落ちることがあるため先に連続化しておく
-    x = x.contiguous()
-    t = t.contiguous()
-    m = m.contiguous()
 
     # 一定確率でスキップ
     if float(torch.rand(1).item()) >= float(aug_prob):
@@ -296,7 +304,7 @@ def augment_tensors(x, t, m, aug_prob=0.8):
     #     noise_std = 0.01 + 0.05 * float(torch.rand(1).item())  # 0.01 ~ 0.06
     #     xb = xb + torch.randn_like(xb) * noise_std
 
-    return xb.contiguous(), tb.contiguous(), mb.contiguous()
+    return xb, tb, mb
 
 
 def masked_bce_with_logits(logits, targets01, labeled_mask, pos_weight=1.0):
@@ -394,6 +402,7 @@ def masked_dice_loss(prob, targets01, labeled_mask, smooth=1.0):
 
 
 def compute_frangi_response(img_u8, use_clahe, clahe_clip, clahe_grid, max_size):
+    img_u8 = _ensure_bgr_u8(img_u8)
 
     if use_clahe:
         img_u8 = apply_clahe(img_u8, clip_limit=clahe_clip, tile_grid=clahe_grid)
@@ -485,6 +494,7 @@ def compute_frangi_response(img_u8, use_clahe, clahe_clip, clahe_grid, max_size)
 
 
 def apply_frangi_percentile(frangi_u8, percentile, img_u8, *, two_sided_delta=8.0):
+    img_u8 = _ensure_bgr_u8(img_u8)
 
     response = frangi_u8.astype(np.float64) / 255.0
     # Temporarily disabled: hysteresis percentile filtering
@@ -508,6 +518,7 @@ def apply_frangi_percentile(frangi_u8, percentile, img_u8, *, two_sided_delta=8.
 
 
 def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=None, max_size=5000, cancel_flag=None):
+    img_u8 = _ensure_bgr_u8(img_u8)
     orig_h, orig_w = img_u8.shape[:2]
     if scr_u8.shape[2] == 4:
         index = np.where(scr_u8[:, :, 3] == 0)
@@ -544,8 +555,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
     labeled[refined_pos_scr] = 1.0
     labeled[bg] = 1.0
 
-    x_np = np.ascontiguousarray(img_rgb.transpose(2, 0, 1))
-    x = torch.from_numpy(x_np).unsqueeze(0).to(device)  # 1x3xHxW
+    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)  # 1x3xHxW
     t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(device)        # 1x1xHxW
     m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to(device)       # 1x1xHxW
     # e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(device)
