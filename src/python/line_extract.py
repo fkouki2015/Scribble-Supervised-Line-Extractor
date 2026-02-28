@@ -496,7 +496,7 @@ def apply_frangi_percentile(frangi_u8, percentile, img_u8, *, two_sided_delta=8.
     return blended
 
 
-def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=None, max_size=5000):
+def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=None, max_size=5000, cancel_flag=None):
     orig_h, orig_w = img_u8.shape[:2]
     if scr_u8.shape[2] == 4:
         index = np.where(scr_u8[:, :, 3] == 0)
@@ -553,6 +553,9 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
 
     pbar = tqdm(range(iters), desc="UNet Training")
     for it in pbar:
+        if cancel_flag is not None and cancel_flag.is_set():
+            break
+
         opt.zero_grad()
 
         xb, tb, mb = augment_tensors(x, t, m, aug_prob=1.0)
@@ -575,7 +578,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
         })
         
         if progress_bar is not None:
-            progress_bar(it + 1, iters, loss.item())
+            progress_bar(it + 1, loss.item())
 
         if (it + 1) % 100 == 0 or it == 0:
             model.eval()

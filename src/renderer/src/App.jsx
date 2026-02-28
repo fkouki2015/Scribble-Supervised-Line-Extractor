@@ -34,6 +34,9 @@ export default function App() {
   // Undo用履歴管理
   const [history, setHistory] = useState([]);
   const refineScribbleFn = useRef(null);
+  // プログレスバー用
+  const [progress, setProgress] = useState({ it: 0, loss: 0 });
+  const progressIntervalRef = useRef(null);
 
   // 描画状態保存
   const saveState = () => {
@@ -231,6 +234,23 @@ export default function App() {
       return;
     }
 
+    // プログレスバー更新
+    progressIntervalRef.current = setInterval(async () => {
+      const res = await fetch("http://127.0.0.1:8000/api/progress");
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error);
+        if (progressIntervalRef.current) {
+          clearInterval(progressIntervalRef.current);
+          progressIntervalRef.current = null;
+        }
+        return;
+      }
+      const data = await res.json();
+      setProgress(data);
+    }, 300);
+
+    // 全体線画を予測
     const formData = new FormData();
     formData.append("lr", lr);
     formData.append("iters", iters);
@@ -243,7 +263,17 @@ export default function App() {
     if (!res.ok) {
       const data = await res.json();
       alert(data.error);
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
       return;
+    }
+
+    // 完了時にインターバルを止める
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
     }
 
     const outBlob = await res.blob();
@@ -251,6 +281,19 @@ export default function App() {
     setUnetOutUrl(url);
   };
 
+  // 生成キャンセル
+  const cancelPrediction = async () => {
+    try {
+      await fetch("http://127.0.0.1:8000/api/cancel_prediction", { method: "POST" });
+    } catch (e) {
+      console.warn("キャンセルリクエスト失敗:", e);
+    }
+    // インターバルを止める
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  };
 
 
   // 画面更新時，キーイベントリスナーを設定
@@ -437,16 +480,18 @@ export default function App() {
         }}
       />
 
+      <button onClick={saveAlphaPng}>線画を保存</button>
+
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
         <span>方式:</span>
         <button onClick={() => setMethod("frangi")} style={{ opacity: method === "frangi" ? 1 : 0.6 }}>
           Frangi（高速）
         </button>
-        <button onClick={() => setMethod("refine")} style={{ opacity: method === "refine" ? 1 : 0.6 }}>
+        <button onClick={() => setMethod("unet")} style={{ opacity: method === "unet" ? 1 : 0.6 }}>
           U-Net（低速）
         </button>
         <span style={{ marginLeft: 20 }}></span>
-        {method === "refine" ? (
+        {method === "unet" ? (
           <>
             <button onClick={clearScribble} disabled={!imgUrl}>スクリブル消去</button>
 
@@ -549,8 +594,9 @@ export default function App() {
           </>
         ) : (
           <>
+            <button onClick={refineScribble} disabled={!imgUrl}>スクリブルの線画化</button>
             <button onClick={predict} disabled={!imgUrl}>全体の線画を生成</button>
-            <button onClick={refineScribble} disabled={!imgUrl}>生成をキャンセル</button>
+            <button onClick={cancelPrediction} disabled={!imgUrl}>生成をキャンセル</button>
             <span>学習率</span>
             <input
               type="number"
@@ -563,16 +609,19 @@ export default function App() {
             <span>学習ステップ数</span>
             <input
               type="number"
-              min={10}
+              min={0}
               step={100}
               value={iters}
               onChange={(e) => setIters(e.target.value)}
               style={{ width: 90 }}
             />
+            生成進捗
+            <progress value={progress.it} max={iters} style={{ width: "300px" }} />
+            {progress.it} / {iters} (損失: {progress.loss.toFixed(4)})
           </>
         )}
 
-        <button onClick={saveAlphaPng}>線画を保存</button>
+
       </div>
 
 

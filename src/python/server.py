@@ -1,3 +1,4 @@
+import threading
 import numpy as np
 import torch
 from flask import Flask, request, send_file
@@ -9,11 +10,26 @@ import io
 app = Flask(__name__)
 CORS(app)
 
-global img_u8, scr_u8, frangi_u8, refined_scr_u8
+global img_u8, scr_u8, frangi_u8, refined_scr_u8, progress_data, cancel_flag
 img_u8 = None
 scr_u8 = None
 frangi_u8 = None
 refined_scr_u8 = None
+progress_data = {"it": 0, "loss": 0}
+cancel_flag = threading.Event()
+
+@app.route("/api/cancel_prediction", methods=["POST"])
+def api_cancel_prediction():
+    global cancel_flag
+    cancel_flag.set()
+    return {"message": "生成をキャンセルしました．"}
+
+@app.route("/api/progress", methods=["GET"])
+def api_progress_bar():
+    global progress_data
+    if progress_data is None:
+        return {"error": "プログレスデータがありません．"}, 400
+    return progress_data
 
 # 画像を最大サイズにリサイズ
 def _resize_to_max(img, max_size: int, interpolation):
@@ -106,6 +122,7 @@ def api_refine_scribble():
 # 全体線画の生成
 @app.route("/api/predict_line", methods=["POST"])
 def api_predict_line():
+    global cancel_flag, progress_data
     lr = float(request.form.get("lr", 1e-3))
     iters = int(request.form.get("iters", 1000))
     max_size = int(request.form.get("max_size", 2000))
@@ -117,16 +134,24 @@ def api_predict_line():
     else:
         device = "cpu"
     
-    if img_u8 is None:
-        return {"error": "画像がありません．"}, 400
     if scr_u8 is None:
         return {"error": "スクリブルがありません．"}, 400
-    if refined_scr_u8 is None:
+    elif refined_scr_u8 is None:
         return {"error": "スクリブルの線画化がされていません．"}, 400
+    elif img_u8 is None:
+        return {"error": "画像がありません．"}, 400
+
+    cancel_flag.clear()
+    progress_data = {"it": 0, "loss": 0}
+
+    def progress_bar(it, loss):
+        global progress_data
+        progress_data["it"] = it
+        progress_data["loss"] = loss
 
     # 全体線画の生成
     try:
-        predicted_line = predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, max_size=max_size)
+        predicted_line = predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=progress_bar, max_size=max_size, cancel_flag=cancel_flag)
     except Exception as e:
         return {"error": f"線画の生成中にエラーが発生しました: {e}"}, 500
 
