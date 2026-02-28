@@ -13,6 +13,8 @@ asarUnpack:
 extraResources:
   - from: src/python/dist/server.exe
     to: server.exe
+  - from: src/python/dist/server
+    to: server
 win:
   executableName: ssle
 nsis:
