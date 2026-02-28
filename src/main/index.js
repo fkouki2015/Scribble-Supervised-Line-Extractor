@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
 import { spawn } from 'child_process'
+import { createWriteStream, mkdirSync } from 'fs'
 
 let serverProcess = null
 
@@ -12,9 +13,19 @@ function getPythonPath() {
     // 開発時: src/python/server.py を直接 python で実行
     return null  // 後述
   }
-  // 本番: asar 展開済みの exe
-  return join(process.resourcesPath, 'server.exe')
+  // 本番: asar 展開済みのバイナリ（Windowsは.exe、Mac/Linuxは拡張子なし）
+  const serverBin = process.platform === 'win32' ? 'server.exe' : 'server'
+  return join(process.resourcesPath, serverBin)
 }
+
+function createServerLogStream() {
+  const logDir = app.getPath('userData')
+  mkdirSync(logDir, { recursive: true })
+  const logPath = join(logDir, 'server.log')
+  console.log('[App] Python server log:', logPath)
+  return createWriteStream(logPath, { flags: 'a' })
+}
+
 
 function createWindow() {
   // Create the browser window.
@@ -55,10 +66,24 @@ app.whenReady().then(() => {
   const pythonPath = getPythonPath()
   if (pythonPath) {
     // 本番: exe を直接実行 (cwd を resourcesPath に設定して temp/ を正しく作成)
+    const logStream = createServerLogStream()
+    const ts = () => new Date().toISOString()
     serverProcess = spawn(pythonPath, [], { cwd: process.resourcesPath })
-    serverProcess.stdout.on('data', (data) => console.log('[Python]', data.toString()))
-    serverProcess.stderr.on('data', (data) => console.error('[Python ERROR]', data.toString()))
-    serverProcess.on('close', (code) => console.log('[Python] exited with code', code))
+    serverProcess.stdout.on('data', (data) => {
+      const msg = `[${ts()}][stdout] ${data.toString()}`
+      console.log('[Python]', data.toString())
+      logStream.write(msg)
+    })
+    serverProcess.stderr.on('data', (data) => {
+      const msg = `[${ts()}][stderr] ${data.toString()}`
+      console.error('[Python ERROR]', data.toString())
+      logStream.write(msg)
+    })
+    serverProcess.on('close', (code) => {
+      const msg = `[${ts()}][close] exited with code ${code}\n`
+      console.log('[Python] exited with code', code)
+      logStream.write(msg)
+    })
   } else {
     // 開発: python コマンドで src/python/server.py を実行
     const serverDir = join(__dirname, '../../src/python')
