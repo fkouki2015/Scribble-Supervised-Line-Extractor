@@ -37,6 +37,11 @@ export default function App() {
   const [progress, setProgress] = useState({ it: 0, iters: 0, loss: 0 })
   const progressIntervalRef = useRef(null)
 
+  const [canvasSize, setCanvasSize] = useState(() => ({
+    width: window.innerWidth * 0.45,
+    height: window.innerHeight - 300
+  }))
+
   // 描画状態保存
   const saveState = () => {
     const scr = scribbleRef.current
@@ -302,6 +307,13 @@ export default function App() {
     }
   }, [refineScribble])
 
+  const calcViewSize = useCallback(() => {
+    setCanvasSize({
+      width: window.innerWidth * 0.45,
+      height: window.innerHeight - 300
+    })
+  }, [])
+
   // 画面更新時，キーイベントリスナーを設定
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -379,6 +391,11 @@ export default function App() {
     }
     img.src = probUrl
   }, [probUrl])
+
+  useEffect(() => {
+    window.addEventListener('resize', calcViewSize)
+    return () => window.removeEventListener('resize', calcViewSize)
+  }, [calcViewSize])
 
   const saveAlphaPng = async () => {
     const src = outRef.current
@@ -682,12 +699,22 @@ export default function App() {
         </div>
 
         {/* 左側: 入力画像とスクリブル */}
-        <div style={{ position: 'relative', display: 'inline-block' }}>
+        <div
+          style={{
+            position: 'relative',
+            display: 'inline-block',
+            width: canvasSize.width,
+            height: canvasSize.height,
+            border: '1px solid gray'
+          }}
+        >
           <img
             ref={imgRef}
             src={imgUrl}
             alt=""
-            style={{ maxWidth: '45vw', height: 'auto', display: 'block' }}
+            style={{
+              display: 'block'
+            }}
           />
 
           {/* スクリブル */}
@@ -699,12 +726,12 @@ export default function App() {
               top: 0,
               width: '100%',
               height: '100%',
-              opacity: method === 'frangi' ? 0 : 0.7,
-              cursor: method === 'frangi' ? 'auto' : 'none',
-              pointerEvents: method === 'frangi' ? 'none' : 'auto'
+              opacity: method === 'frangi' || !imgUrl ? 0 : 0.7,
+              cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none',
+              pointerEvents: method === 'frangi' || !imgUrl ? 'none' : 'auto'
             }}
             onPointerDown={(e) => {
-              if (method === 'frangi') return
+              if (method === 'frangi' || !imgUrl) return
               saveState() // 描画開始前に履歴を保存
               setDrawing(true)
               last.current = null
@@ -712,22 +739,23 @@ export default function App() {
               drawLine(p.x, p.y)
             }}
             onPointerMove={(e) => {
-              if (method === 'frangi') return
+              if (method === 'frangi' || !imgUrl) return
               const p = getPos(e)
 
               // カーソルサイズは画面上のピクセル（lineWidth）にそのまま合わせる
-              if (method !== 'frangi') setCursorPos({ x: e.clientX, y: e.clientY, size: lineWidth })
+              if (method !== 'frangi' && imgUrl)
+                setCursorPos({ x: e.clientX, y: e.clientY, size: lineWidth })
               if (!drawing) return
               drawLine(p.x, p.y)
             }}
             onPointerUp={() => {
-              if (method === 'frangi') return
+              if (method === 'frangi' || !imgUrl) return
               setDrawing(false)
               refineScribble() // 描画完了ごとに線画を更新
               last.current = null
             }}
             onPointerLeave={() => {
-              if (method === 'frangi') return
+              if (method === 'frangi' || !imgUrl) return
               if (drawing) refineScribble() // 描画中にキャンバス外へ出た場合
               setDrawing(false)
               last.current = null
@@ -736,7 +764,7 @@ export default function App() {
           />
 
           {/* カスタムカーソル */}
-          {method !== 'frangi' && cursorPos && (
+          {method !== 'frangi' && cursorPos && imgUrl && (
             <div
               style={{
                 position: 'fixed',
@@ -757,11 +785,20 @@ export default function App() {
         </div>
 
         {/* 右側: 出力結果 */}
-        <div style={{ position: 'relative', display: 'inline-block', backgroundColor: 'white' }}>
+        <div
+          style={{
+            position: 'relative',
+            display: 'inline-block',
+            flex: 1,
+            width: canvasSize.width,
+            height: canvasSize.height,
+            border: '1px solid gray'
+          }}
+        >
           <img
             src={imgUrl}
             alt="Output background"
-            style={{ maxWidth: '45vw', height: 'auto', display: 'block', visibility: 'hidden' }}
+            style={{ width: '100%', height: 'auto', display: 'block', visibility: 'hidden' }}
           />
           {/* 出力（二値化結果） */}
           <canvas
