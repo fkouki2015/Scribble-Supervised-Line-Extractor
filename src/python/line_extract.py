@@ -11,7 +11,6 @@ if not hasattr(np, 'warnings'):
     np.warnings = warnings
 from skimage.filters import frangi
 from tqdm import tqdm
-os.environ["OMP_NUM_THREADS"] = "1"
 # -----------------------------
 # Small U-Net
 # -----------------------------
@@ -102,60 +101,50 @@ class UNet(nn.Module):
 
 
 
-def compute_edge_map(gray_img):
-    '''
-    Compute edge map from grayscale image.
-    '''
-    g = cv2.GaussianBlur(gray_img, (0, 0), 1.0)
-    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(gx, gy)
-    mag = mag / (mag.max() + 1e-6)
-    return mag
+# def compute_edge_map(gray_img):
+#     '''
+#     Compute edge map from grayscale image.
+#     '''
+#     g = cv2.GaussianBlur(gray_img, (0, 0), 1.0)
+#     gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+#     gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+#     mag = cv2.magnitude(gx, gy)
+#     mag = mag / (mag.max() + 1e-6)
+#     return mag
 
-def make_scribble_label_mask(scr_bgr):
+def make_scribble_label_mask(scr_u8):
     """
-    Returns mask with:
-      1 for line-labeled pixels
-     -1 for unknown
+    1: 線画
+    0: 背景
+    -1: 未定義
     """
-    b, g, r = cv2.split(scr_bgr)
+    b, g, r = cv2.split(scr_u8)
 
     line = (r < 5) & (g > 250) & (b < 5)
     bg = (r >250) & (g < 5) & (b < 5)
-    mask = np.full(scr_bgr.shape[:2], -1, dtype=np.int8)
+    mask = np.full(scr_u8.shape[:2], -1, dtype=np.int8)
     mask[line] = 1
     mask[bg] = 0
     return mask
 
 
 
-def extract_line_pixels_in_scribble(img_bgr, pos_scr, neg_scr=None, sigmas=(1, 2, 3)):
-    """Refine positive scribble pixels using Frangi vesselness inside each component.
-
-    This aims to detect thin line-like structures by shape (Hessian eigen-analysis),
-    so it can work even when intensity contrast is weak or background has texture.
-
-    Args:
-        img_bgr: input image (BGR uint8)
-        pos_scr: positive scribble mask (bool HxW)
-        neg_scr: optional negative scribble mask (bool HxW) to exclude
-        sigmas: Frangi scales (match line thickness)
+def extract_line_pixels_in_scribble(img_u8, pos_scr, neg_scr=None, sigmas=(1, 2, 3)):
     """
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    img_u8: 入力画像(uint8, HxWxC)
+    pos_scr: 正のスクリブル(bool, HxW)
+    neg_scr: 負のスクリブル(bool, HxW)
+    sigmas: Frangiスケール(tuple)
+    """
+    gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
     refined = np.zeros_like(pos_scr, dtype=bool)
     scr_u8 = pos_scr.astype(np.uint8)
+    # 正のスクリブルを連結成分に分割
     num_labels, labels = cv2.connectedComponents(scr_u8, connectivity=8)
 
     for lab_id in range(1, num_labels):
         region_mask = labels == lab_id
-
-        # Exclude explicit background scribble if provided
-        if neg_scr is not None:
-            region_mask = region_mask & (~neg_scr)
-            if not np.any(region_mask):
-                continue
 
         ys, xs = np.where(region_mask)
         y0, y1 = int(ys.min()), int(ys.max()) + 1
@@ -167,23 +156,27 @@ def extract_line_pixels_in_scribble(img_bgr, pos_scr, neg_scr=None, sigmas=(1, 2
         local_mask = region_mask[y0:y1, x0:x1]
         resp_vals = response_patch[local_mask]
 
+        # Frangi応答が小さすぎる場合はスキップ
         if resp_vals.size == 0 or float(resp_vals.max()) < 1e-8:
             continue
 
-        # Normalize and use a relaxed Otsu threshold (half Otsu) to avoid missing thin lines.
+        # 正規化
         resp_norm = resp_vals / (float(resp_vals.max()) + 1e-9)
         resp_u8 = np.clip(resp_norm * 255.0, 0, 255).astype(np.uint8)
 
+        # 1色のみの場合
         if len(np.unique(resp_u8)) < 2:
             continue
 
+        # Otsuの二値化
         otsu_thresh, _ = cv2.threshold(resp_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         low_thresh = max(float(otsu_thresh) * 0.5, 1.0)
         line_pixels = resp_u8 >= low_thresh
 
         if int(line_pixels.sum()) == 0:
             continue
-
+        
+        # ローカル座標から大域座標へ
         local_coords = np.argwhere(local_mask)
         chosen = local_coords[line_pixels]
         refined[chosen[:, 0] + y0, chosen[:, 1] + x0] = True
@@ -191,34 +184,25 @@ def extract_line_pixels_in_scribble(img_bgr, pos_scr, neg_scr=None, sigmas=(1, 2
     return refined
 
 
-def refine_scribble(img_path, scr_path, use_clahe=False, clahe_clip=2.0, clahe_grid=8, max_size=5000, *, sigmas=(1, 2, 3)):
-    """Generate a refined line mask image from user scribbles.
+def refine_scribble(img_u8, scr_u8, use_clahe=False, clahe_clip=2.0, clahe_grid=8, max_size=5000, *, sigmas=(1, 2, 3)):
 
-    The output is a preview image: original pixels where refined mask is True,
-    white elsewhere. The corresponding binary mask can be re-derived from the
-    output by thresholding if needed.
-    """
-    img_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
-    if img_bgr is None:
-        raise FileNotFoundError(f"Cannot read: {img_path}")
-    scr_bgr = cv2.imread(scr_path, -1)
-    if scr_bgr is None:
-        raise FileNotFoundError(f"Cannot read: {scr_path}")
+    # スクリブルのアルファチャンネルを黒に
+    if scr_u8.ndim == 3 and scr_u8.shape[2] == 4:
+        idx = np.where(scr_u8[:, :, 3] == 0)
+        scr_u8[idx] = [0, 0, 0, 0]
+        scr_u8 = cv2.cvtColor(scr_u8, cv2.COLOR_BGRA2BGR)
 
-    if scr_bgr.ndim == 3 and scr_bgr.shape[2] == 4:
-        idx = np.where(scr_bgr[:, :, 3] == 0)
-        scr_bgr[idx] = [0, 0, 0, 0]
-        scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
-
+    # CLAHEの適用
     if use_clahe:
-        img_bgr = apply_clahe_bgr(img_bgr, clip_limit=clahe_clip, tile_grid=clahe_grid)
+        img_u8 = apply_clahe(img_u8, clip_limit=clahe_clip, tile_grid=clahe_grid)
 
-    scr_mask = make_scribble_label_mask(scr_bgr)
+    scr_mask = make_scribble_label_mask(scr_u8)
     pos_scr = scr_mask == 1
     neg_scr = scr_mask == 0
 
-    refined_pos = extract_line_pixels_in_scribble(img_bgr, pos_scr, neg_scr=neg_scr, sigmas=sigmas)
+    refined_pos = extract_line_pixels_in_scribble(img_u8, pos_scr, neg_scr=neg_scr, sigmas=sigmas)
 
+    # 白黒反転
     refined_pos_inv = ~refined_pos
     return refined_pos_inv.astype(np.uint8) * 255
 
@@ -226,9 +210,9 @@ def refine_scribble(img_path, scr_path, use_clahe=False, clahe_clip=2.0, clahe_g
 
 
 
-def apply_clahe_bgr(image, clip_limit=2.0, tile_grid=8):
+def apply_clahe(image, clip_limit=2.0, tile_grid=8):
     """
-    Contrast normalization on luminance while preserving color.
+    コントラスト正規化
     """
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
@@ -239,79 +223,75 @@ def apply_clahe_bgr(image, clip_limit=2.0, tile_grid=8):
 
 def normalize_image(img_rgb):
     """
-    Simple channel-wise normalization for training stability.
+    学習安定化のための正規化
     """
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     return (img_rgb - mean) / std
 
 
-def augment_tensors(x, t, m, e, aug_prob=0.8):
+def augment_tensors(x, t, m, aug_prob=0.8):
     """
-    Lightweight augmentation for single-image training.
-    Geometric transforms are applied consistently to x/t/m/e.
-    Photometric transforms are applied to x only.
+    オーグメンテーション
     """
+    # 一定確率でスキップ
     if float(torch.rand(1).item()) >= float(aug_prob):
-        return x, t, m, e
+        return x, t, m
 
-    xb, tb, mb, eb = x, t, m, e
+    xb, tb, mb = x, t, m
 
+    # 横方向反転
     if float(torch.rand(1).item()) < 0.5:
         xb = torch.flip(xb, dims=[3])
         tb = torch.flip(tb, dims=[3])
         mb = torch.flip(mb, dims=[3])
-        eb = torch.flip(eb, dims=[3])
+    # 縦方向反転
     if float(torch.rand(1).item()) < 0.5:
         xb = torch.flip(xb, dims=[2])
         tb = torch.flip(tb, dims=[2])
         mb = torch.flip(mb, dims=[2])
-        eb = torch.flip(eb, dims=[2])
 
-    k = int(torch.randint(0, 4, (1,)).item())
+    # 90*k度回転
+    k = int(torch.randint(0, 4, (1,)).item()) # 0, 1, 2, 3
     if k > 0:
         xb = torch.rot90(xb, k=k, dims=[2, 3])
         tb = torch.rot90(tb, k=k, dims=[2, 3])
         mb = torch.rot90(mb, k=k, dims=[2, 3])
-        eb = torch.rot90(eb, k=k, dims=[2, 3])
 
-    # Random Affine (translation & scale)
+    # アフィン変換
     if float(torch.rand(1).item()) < 0.7:
-        angle = float((torch.rand(1).item() - 0.5) * 30.0) # -15 to +15 deg
-        translate = [float((torch.rand(1).item() - 0.5) * 0.1), float((torch.rand(1).item() - 0.5) * 0.1)] # up to 10% translation
-        scale = float(0.8 + 0.4 * torch.rand(1).item()) # 0.8x to 1.2x scale
-        shear = float((torch.rand(1).item() - 0.5) * 10.0) # -5 to +5 deg shear
+        angle = float((torch.rand(1).item() - 0.5) * 30.0) # -15 ~ 15度
+        translate = [float((torch.rand(1).item() - 0.5) * 0.1), float((torch.rand(1).item() - 0.5) * 0.1)] # -10% ~ 10% translation
+        scale = float(0.8 + 0.4 * torch.rand(1).item()) # 0.8x ~ 1.2x scale
+        shear = float((torch.rand(1).item() - 0.5) * 10.0) # -5 ~ 5 度せん断
 
-        # Apply to all spatial tensors consistently
-        # Use bilinear for images to avoid harsh pixelation
         xb = TF.affine(xb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.BILINEAR)
-        # Use nearest neighbor for masks/labels to keep them clean {0,1}
         tb = TF.affine(tb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.NEAREST)
         mb = TF.affine(mb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.NEAREST)
-        eb = TF.affine(eb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.BILINEAR)
 
-    # Mild photometric jitter on normalized RGB.
+    # 輝度変動
     if float(torch.rand(1).item()) < 0.8:
-        # Increase gain variance
-        gain = 0.70 + 0.60 * float(torch.rand(1).item())  # [0.70, 1.30]
-        bias = (float(torch.rand(1).item()) - 0.5) * 0.40  # [-0.2, 0.2]
+        gain = 0.70 + 0.60 * float(torch.rand(1).item())  # 0.70 ~ 1.30
+        bias = (float(torch.rand(1).item()) - 0.5) * 0.40  # -0.2 ~ 0.2
         xb = xb * gain + bias
     
-    # Color jitter (applied to normalized tensors, so it acts like a mild tint/contrast shift)
+    # 色相変動
     if float(torch.rand(1).item()) < 0.5:
-        # Random channel scaling
         c_scale = 0.9 + 0.2 * torch.rand(3, 1, 1).to(xb.device)
         xb = xb * c_scale
 
+    # ノイズ
     if float(torch.rand(1).item()) < 0.5:
-        # Increase noise std slightly
-        noise_std = 0.01 + 0.05 * float(torch.rand(1).item())  # [0.01, 0.06]
+        noise_std = 0.01 + 0.05 * float(torch.rand(1).item())  # 0.01 ~ 0.06
         xb = xb + torch.randn_like(xb) * noise_std
 
-    return xb, tb, mb, eb
+    return xb, tb, mb
 
 
 def masked_bce_with_logits(logits, targets01, labeled_mask, pos_weight=1.0):
+    """
+    重み付き二値交差エントロピー損失
+    """
     pw = torch.tensor(float(pos_weight), device=logits.device, dtype=logits.dtype)
     loss = F.binary_cross_entropy_with_logits(
         logits, targets01, reduction="none", pos_weight=pw
@@ -321,6 +301,9 @@ def masked_bce_with_logits(logits, targets01, labeled_mask, pos_weight=1.0):
     return loss.sum() / denom
 
 def masked_dice_loss(prob, targets01, labeled_mask, smooth=1.0):
+    """
+    dice損失：重なり度を最大化する損失
+    """
     prob = prob * labeled_mask
     tgt = targets01 * labeled_mask
     inter = (prob * tgt).sum()
@@ -360,143 +343,139 @@ def masked_dice_loss(prob, targets01, labeled_mask, smooth=1.0):
 #     except Exception:
 #         return mask01
 
-def _apply_hysteresis_percentile(response, percentile=99.0, low_percentile=None):
+# def _apply_hysteresis_percentile(response, percentile=99.0, low_percentile=None):
 
-    valid = np.ones(response.shape, dtype=bool)
-    resp_vals = response[valid]
-    if resp_vals.size == 0:
-        return np.zeros(response.shape, dtype=bool)
+#     valid = np.ones(response.shape, dtype=bool)
+#     resp_vals = response[valid]
+#     if resp_vals.size == 0:
+#         return np.zeros(response.shape, dtype=bool)
 
-    maxv = float(np.max(resp_vals))
-    if not np.isfinite(maxv) or maxv <= 1e-8:
-        return np.zeros(response.shape, dtype=bool)
+#     maxv = float(np.max(resp_vals))
+#     if not np.isfinite(maxv) or maxv <= 1e-8:
+#         return np.zeros(response.shape, dtype=bool)
 
-    hi_p = float(np.clip(percentile, 0.0, 100.0))
-    lo_p = max(0.0, hi_p - 2.0) if low_percentile is None else float(np.clip(low_percentile, 0.0, hi_p))
+#     hi_p = float(np.clip(percentile, 0.0, 100.0))
+#     lo_p = max(0.0, hi_p - 2.0) if low_percentile is None else float(np.clip(low_percentile, 0.0, hi_p))
 
-    thr_hi = float(np.percentile(resp_vals, hi_p))
-    thr_lo = float(np.percentile(resp_vals, lo_p))
+#     thr_hi = float(np.percentile(resp_vals, hi_p))
+#     thr_lo = float(np.percentile(resp_vals, lo_p))
 
-    eps = 1e-8
-    seed = (response >= thr_hi) & (response > eps) & valid
-    grow = (response >= thr_lo) & (response > eps) & valid
+#     eps = 1e-8
+#     seed = (response >= thr_hi) & (response > eps) & valid
+#     grow = (response >= thr_lo) & (response > eps) & valid
 
-    if not np.any(seed):
-        return grow
+#     if not np.any(seed):
+#         return grow
 
-    grow_u8 = grow.astype(np.uint8) * 255
-    num, labels = cv2.connectedComponents(grow_u8, connectivity=8)
-    if num <= 1:
-        return seed
+#     grow_u8 = grow.astype(np.uint8) * 255
+#     num, labels = cv2.connectedComponents(grow_u8, connectivity=8)
+#     if num <= 1:
+#         return seed
 
-    keep = np.zeros(num, dtype=bool)
-    seed_labels = labels[seed]
-    if seed_labels.size > 0:
-        keep[np.unique(seed_labels)] = True
+#     keep = np.zeros(num, dtype=bool)
+#     seed_labels = labels[seed]
+#     if seed_labels.size > 0:
+#         keep[np.unique(seed_labels)] = True
 
-    out = keep[labels]
-    out &= valid
-    return out
+#     out = keep[labels]
+#     out &= valid
+#     return out
 
 
-def compute_frangi_response(img_path, use_clahe, clahe_clip, clahe_grid, max_size):
-
-    img_bgr = cv2.imread(img_path)
+def compute_frangi_response(img_u8, use_clahe, clahe_clip, clahe_grid, max_size):
 
     if use_clahe:
-        img_bgr = apply_clahe_bgr(img_bgr, clip_limit=clahe_clip, tile_grid=clahe_grid)
+        img_u8 = apply_clahe(img_u8, clip_limit=clahe_clip, tile_grid=clahe_grid)
 
 
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
     response = frangi(gray, sigmas=(1, 2, 3), black_ridges=True)
 
     return np.clip(response / (response.max() + 1e-9) * 255, 0, 255).astype(np.uint8)
 
 
 
-def _shift_with_valid(img_f32, dy, dx):
-    """Shift image by (dy, dx) with valid mask (no wrap-around).
+# def _shift_with_valid(img_f32, dy, dx):
+#     """Shift image by (dy, dx) with valid mask (no wrap-around).
 
-    Returns:
-      shifted: float32 array (same shape)
-      valid: uint8 {0,1} array indicating pixels with a valid shifted value
-    """
-    h, w = img_f32.shape
-    shifted = np.zeros((h, w), dtype=np.float32)
-    valid = np.zeros((h, w), dtype=np.uint8)
+#     Returns:
+#       shifted: float32 array (same shape)
+#       valid: uint8 {0,1} array indicating pixels with a valid shifted value
+#     """
+#     h, w = img_f32.shape
+#     shifted = np.zeros((h, w), dtype=np.float32)
+#     valid = np.zeros((h, w), dtype=np.uint8)
 
-    if dy >= 0:
-        ys_src = slice(0, h - dy)
-        ys_dst = slice(dy, h)
-    else:
-        ys_src = slice(-dy, h)
-        ys_dst = slice(0, h + dy)
+#     if dy >= 0:
+#         ys_src = slice(0, h - dy)
+#         ys_dst = slice(dy, h)
+#     else:
+#         ys_src = slice(-dy, h)
+#         ys_dst = slice(0, h + dy)
 
-    if dx >= 0:
-        xs_src = slice(0, w - dx)
-        xs_dst = slice(dx, w)
-    else:
-        xs_src = slice(-dx, w)
-        xs_dst = slice(0, w + dx)
+#     if dx >= 0:
+#         xs_src = slice(0, w - dx)
+#         xs_dst = slice(dx, w)
+#     else:
+#         xs_src = slice(-dx, w)
+#         xs_dst = slice(0, w + dx)
 
-    shifted[ys_dst, xs_dst] = img_f32[ys_src, xs_src]
-    valid[ys_dst, xs_dst] = 1
-    return shifted, valid
-
-
-def _keep_two_sided_contrast(gray_u8, candidate_mask, *, delta=8.0, distances=(1, 2)):
-    """Reject edge-like candidates where intensity changes only on one side.
-
-    We keep a candidate pixel if there exists a direction where both sides
-    (along that direction) are brighter than the center by at least `delta`.
-
-    Args:
-      gray_u8: grayscale uint8 image
-      candidate_mask: boolean mask of Frangi candidates
-      delta: minimum per-side intensity difference in uint8 units
-      distances: sample distances (in pixels) to average on each side
-    """
-    if candidate_mask is None or not np.any(candidate_mask):
-        return candidate_mask
-
-    g = gray_u8.astype(np.float32)
-    c = g
-    delta_f = float(delta)
-
-    directions = ((1, 0), (0, 1), (1, 1), (1, -1))
-    keep_any = np.zeros_like(candidate_mask, dtype=bool)
-
-    for dx, dy in directions:
-        sum_pos = np.zeros_like(g, dtype=np.float32)
-        cnt_pos = np.zeros_like(g, dtype=np.uint8)
-        sum_neg = np.zeros_like(g, dtype=np.float32)
-        cnt_neg = np.zeros_like(g, dtype=np.uint8)
-
-        for dist in distances:
-            sp, vp = _shift_with_valid(g, dy * int(dist), dx * int(dist))
-            sn, vn = _shift_with_valid(g, -dy * int(dist), -dx * int(dist))
-            sum_pos += sp
-            cnt_pos += vp
-            sum_neg += sn
-            cnt_neg += vn
-
-        valid = (cnt_pos > 0) & (cnt_neg > 0)
-        pos_mean = sum_pos / np.maximum(cnt_pos.astype(np.float32), 1.0)
-        neg_mean = sum_neg / np.maximum(cnt_neg.astype(np.float32), 1.0)
-
-        # Two-sided contrast for dark ridges: both sides brighter than center.
-        cond = valid & ((pos_mean - c) > delta_f) & ((neg_mean - c) > delta_f)
-        keep_any |= cond
-
-    return candidate_mask & keep_any
+#     shifted[ys_dst, xs_dst] = img_f32[ys_src, xs_src]
+#     valid[ys_dst, xs_dst] = 1
+#     return shifted, valid
 
 
+# def _keep_two_sided_contrast(gray_u8, candidate_mask, *, delta=8.0, distances=(1, 2)):
+#     """Reject edge-like candidates where intensity changes only on one side.
 
-def apply_frangi_percentile(frangi_path, percentile, img_path=None, *, two_sided_delta=8.0):
+#     We keep a candidate pixel if there exists a direction where both sides
+#     (along that direction) are brighter than the center by at least `delta`.
 
-    frangi_bgr = cv2.imread(frangi_path, -1)
+#     Args:
+#       gray_u8: grayscale uint8 image
+#       candidate_mask: boolean mask of Frangi candidates
+#       delta: minimum per-side intensity difference in uint8 units
+#       distances: sample distances (in pixels) to average on each side
+#     """
+#     if candidate_mask is None or not np.any(candidate_mask):
+#         return candidate_mask
 
-    response = frangi_bgr.astype(np.float64) / 255.0
+#     g = gray_u8.astype(np.float32)
+#     c = g
+#     delta_f = float(delta)
+
+#     directions = ((1, 0), (0, 1), (1, 1), (1, -1))
+#     keep_any = np.zeros_like(candidate_mask, dtype=bool)
+
+#     for dx, dy in directions:
+#         sum_pos = np.zeros_like(g, dtype=np.float32)
+#         cnt_pos = np.zeros_like(g, dtype=np.uint8)
+#         sum_neg = np.zeros_like(g, dtype=np.float32)
+#         cnt_neg = np.zeros_like(g, dtype=np.uint8)
+
+#         for dist in distances:
+#             sp, vp = _shift_with_valid(g, dy * int(dist), dx * int(dist))
+#             sn, vn = _shift_with_valid(g, -dy * int(dist), -dx * int(dist))
+#             sum_pos += sp
+#             cnt_pos += vp
+#             sum_neg += sn
+#             cnt_neg += vn
+
+#         valid = (cnt_pos > 0) & (cnt_neg > 0)
+#         pos_mean = sum_pos / np.maximum(cnt_pos.astype(np.float32), 1.0)
+#         neg_mean = sum_neg / np.maximum(cnt_neg.astype(np.float32), 1.0)
+
+#         # Two-sided contrast for dark ridges: both sides brighter than center.
+#         cond = valid & ((pos_mean - c) > delta_f) & ((neg_mean - c) > delta_f)
+#         keep_any |= cond
+
+#     return candidate_mask & keep_any
+
+
+
+def apply_frangi_percentile(frangi_u8, percentile, img_u8, *, two_sided_delta=8.0):
+
+    response = frangi_u8.astype(np.float64) / 255.0
     # Temporarily disabled: hysteresis percentile filtering
     # pos_mask = _apply_hysteresis_percentile(response, float(percentile))
     thr = float(np.percentile(response, float(np.clip(percentile, 0.0, 100.0))))
@@ -508,35 +487,29 @@ def apply_frangi_percentile(frangi_path, percentile, img_path=None, *, two_sided
     #     if img_bgr is not None:
     #         gray_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     #         pos_mask = _keep_two_sided_contrast(gray_u8, pos_mask, delta=float(two_sided_delta))
-    img_bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR) if img_path is not None else None
-    if img_bgr is None:
-        img_bgr = np.ones((*response.shape, 3), dtype=np.uint8) * 255
 
     # refined_bgr = (pos_mask.astype(np.uint8) * 255)
     # refined_bgr = cv2.LUT(refined_bgr, 255 - np.arange(256)).astype(np.uint8)
     a = pos_mask[:, :, np.newaxis].astype(np.float32)
-    white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
-    blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+    white = np.ones_like(img_u8, dtype=np.float32) * 255.0
+    blended = img_u8.astype(np.float32) * a + white * (1.0 - a)
     return blended
 
 
-def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, progress_bar=None, max_size=5000):
-    img_bgr = cv2.imread(img_path)
-    scr_bgr = cv2.imread(scr_path, -1)
-    orig_h, orig_w = img_bgr.shape[:2]
-    if scr_bgr.shape[2] == 4:
-        index = np.where(scr_bgr[:, :, 3] == 0)
-        scr_bgr[index] = [0, 0, 0, 0]
-        scr_bgr = cv2.cvtColor(scr_bgr, cv2.COLOR_BGRA2BGR)
+def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=None, max_size=5000):
+    orig_h, orig_w = img_u8.shape[:2]
+    if scr_u8.shape[2] == 4:
+        index = np.where(scr_u8[:, :, 3] == 0)
+        scr_u8[index] = [0, 0, 0, 0]
+        scr_u8 = cv2.cvtColor(scr_u8, cv2.COLOR_BGRA2BGR)
 
     # cv2.imwrite("debug_scr.png", scr_bgr)
-    refined_scr_bgr = cv2.imread(refined_scr_path)
-    refined_scr_bgr = cv2.LUT(refined_scr_bgr, 255-np.arange(256)).astype(np.uint8)
+    refined_scr_u8 = cv2.LUT(refined_scr_u8, 255-np.arange(256)).astype(np.uint8)
 
 
-    pos_scr = scr_bgr[:, :, 1] == 255
-    neg_scr = scr_bgr[:, :, 2] == 255
-    refined_pos_scr = refined_scr_bgr[:, :, 0] == 255
+    pos_scr = scr_u8[:, :, 1] == 255
+    neg_scr = scr_u8[:, :, 2] == 255
+    refined_pos_scr = refined_scr_u8 == 255
     # cv2.imwrite("debug_refined_pos_scr.png", refined_pos_scr.astype(np.uint8)*255)
     kernel = np.ones((7, 7), np.uint8)
     dil = cv2.dilate(refined_pos_scr.astype(np.uint8), kernel, iterations=2)
@@ -544,11 +517,11 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, progre
     ring = (dil == 1) & (refined_pos_scr == 0)
     # cv2.imwrite("ring.png", ring.astype(np.uint8) * 255)
 
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img_rgb = cv2.cvtColor(img_u8, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     img_rgb = normalize_image(img_rgb)
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    img_gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY)
 
-    edge = compute_edge_map(img_gray)
+    # edge = compute_edge_map(img_gray)
     bg_auto = ring
     bg = neg_scr | bg_auto
     # cv2.imwrite("debug_bg.png", bg.astype(np.uint8)*255)
@@ -563,7 +536,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, progre
     x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)  # 1x3xHxW
     t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(device)        # 1x1xHxW
     m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to(device)       # 1x1xHxW
-    e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(device)
+    # e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(device)
 
     model = UNet(in_ch=3, base_ch=32).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -582,7 +555,7 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, progre
     for it in pbar:
         opt.zero_grad()
 
-        xb, tb, mb, _ = augment_tensors(x, t, m, e, aug_prob=1.0)
+        xb, tb, mb = augment_tensors(x, t, m, aug_prob=1.0)
 
 
         logits = model(xb)
@@ -610,16 +583,16 @@ def predict_line(img_path, scr_path, refined_scr_path, lr, iters, device, progre
                 prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
             model.train()
             a = prob_tmp[:, :, np.newaxis].astype(np.float32)
-            white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
-            blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+            white = np.ones_like(img_u8, dtype=np.float32) * 255.0
+            blended = img_u8.astype(np.float32) * a + white * (1.0 - a)
             # cv2.imwrite(f"debug_out_{it}.png", blended.astype(np.uint8))
 
     model.eval()
     with torch.no_grad():
         prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
     a = prob_tmp[:, :, np.newaxis].astype(np.float32)
-    white = np.ones_like(img_bgr, dtype=np.float32) * 255.0
-    blended = img_bgr.astype(np.float32) * a + white * (1.0 - a)
+    white = np.ones_like(img_u8, dtype=np.float32) * 255.0
+    blended = img_u8.astype(np.float32) * a + white * (1.0 - a)
     out = blended.astype(np.uint8)
     if out.shape[:2] != (orig_h, orig_w):
         out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
