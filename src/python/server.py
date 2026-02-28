@@ -33,6 +33,8 @@ def api_progress_bar():
 
 # 画像を最大サイズにリサイズ
 def _resize_to_max(img, max_size: int, interpolation):
+    if img is None:
+        raise ValueError("画像のデコードに失敗しました．対応していない形式、または空のファイルの可能性があります．")
     h, w = img.shape[:2]
     s = max(h, w)
     if s <= int(max_size):
@@ -44,11 +46,16 @@ def _resize_to_max(img, max_size: int, interpolation):
 
 # 画像を読み込んでnumpy配列に変換
 def decode_image(file_storage, max_size: int, interpolation=cv2.INTER_AREA):
+    if file_storage is None:
+        return None
     data = file_storage.read()
+    if not data:
+        return None
     # デコード
     arr = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
-    arr = _resize_to_max(arr, int(max_size), interpolation=interpolation)
-    return arr
+    if arr is None:
+        return None
+    return _resize_to_max(arr, int(max_size), interpolation=interpolation)
 
 # Frangi応答
 @app.route("/api/compute_frangi", methods=["POST"])
@@ -65,6 +72,8 @@ def api_compute_frangi():
         return {"error": "画像がありません．"}, 400
 
     img_u8 = decode_image(image, max_size, interpolation=cv2.INTER_AREA)
+    if img_u8 is None:
+        return {"error": "画像のデコードに失敗しました．対応していない形式、または空のファイルの可能性があります．"}, 400
     # Frangi応答を計算
     frangi_u8 = compute_frangi_response(img_u8, use_clahe, clahe_clip, clahe_grid, max_size)
 
@@ -102,7 +111,12 @@ def api_refine_scribble():
         return {"error": "スクリブルがありません．"}, 400
 
     img_u8 = decode_image(image, max_size, interpolation=cv2.INTER_AREA)
+    if img_u8 is None:
+        return {"error": "画像のデコードに失敗しました．対応していない形式、または空のファイルの可能性があります．"}, 400
+
     scr_u8 = decode_image(scribble, max_size, interpolation=cv2.INTER_NEAREST)
+    if scr_u8 is None:
+        return {"error": "スクリブル画像のデコードに失敗しました．"}, 400
     # スクリブルの線画化
     try:
         refined_scr_u8 = refine_scribble(
