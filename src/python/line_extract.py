@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 import warnings
 if not hasattr(np, 'warnings'):
     np.warnings = warnings
@@ -274,7 +275,6 @@ def augment_tensors(x, t, m, e, aug_prob=0.8):
         mb = torch.rot90(mb, k=k, dims=[2, 3])
         eb = torch.rot90(eb, k=k, dims=[2, 3])
 
-    import torchvision.transforms.functional as TF
     # Random Affine (translation & scale)
     if float(torch.rand(1).item()) < 0.7:
         angle = float((torch.rand(1).item() - 0.5) * 30.0) # -15 to +15 deg
