@@ -234,6 +234,12 @@ def augment_tensors(x, t, m, aug_prob=0.8):
     """
     オーグメンテーション
     """
+    # torchvision の幾何変換は内部で view() を使う経路があり、
+    # 非連続(strided)テンソルだと落ちることがあるため先に連続化しておく
+    x = x.contiguous()
+    t = t.contiguous()
+    m = m.contiguous()
+
     # 一定確率でスキップ
     if float(torch.rand(1).item()) >= float(aug_prob):
         return x, t, m
@@ -260,6 +266,11 @@ def augment_tensors(x, t, m, aug_prob=0.8):
 
     # アフィン変換
     if float(torch.rand(1).item()) < 0.7:
+        # 連続化
+        xb = xb.contiguous()
+        tb = tb.contiguous()
+        mb = mb.contiguous()
+
         angle = float((torch.rand(1).item() - 0.5) * 30.0) # -15 ~ 15度
         translate = [float((torch.rand(1).item() - 0.5) * 0.1), float((torch.rand(1).item() - 0.5) * 0.1)] # -10% ~ 10% translation
         scale = float(0.8 + 0.4 * torch.rand(1).item()) # 0.8x ~ 1.2x scale
@@ -269,23 +280,23 @@ def augment_tensors(x, t, m, aug_prob=0.8):
         tb = TF.affine(tb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.NEAREST)
         mb = TF.affine(mb, angle=angle, translate=translate, scale=scale, shear=shear, interpolation=TF.InterpolationMode.NEAREST)
 
-    # 輝度変動
-    if float(torch.rand(1).item()) < 0.8:
-        gain = 0.70 + 0.60 * float(torch.rand(1).item())  # 0.70 ~ 1.30
-        bias = (float(torch.rand(1).item()) - 0.5) * 0.40  # -0.2 ~ 0.2
-        xb = xb * gain + bias
+    # # 輝度変動
+    # if float(torch.rand(1).item()) < 0.8:
+    #     gain = 0.70 + 0.60 * float(torch.rand(1).item())  # 0.70 ~ 1.30
+    #     bias = (float(torch.rand(1).item()) - 0.5) * 0.40  # -0.2 ~ 0.2
+    #     xb = xb * gain + bias
     
-    # 色相変動
-    if float(torch.rand(1).item()) < 0.5:
-        c_scale = 0.9 + 0.2 * torch.rand(3, 1, 1).to(xb.device)
-        xb = xb * c_scale
+    # # 色相変動
+    # if float(torch.rand(1).item()) < 0.5:
+    #     c_scale = 0.9 + 0.2 * torch.rand(3, 1, 1).to(xb.device)
+    #     xb = xb * c_scale
 
-    # ノイズ
-    if float(torch.rand(1).item()) < 0.5:
-        noise_std = 0.01 + 0.05 * float(torch.rand(1).item())  # 0.01 ~ 0.06
-        xb = xb + torch.randn_like(xb) * noise_std
+    # # ノイズ
+    # if float(torch.rand(1).item()) < 0.5:
+    #     noise_std = 0.01 + 0.05 * float(torch.rand(1).item())  # 0.01 ~ 0.06
+    #     xb = xb + torch.randn_like(xb) * noise_std
 
-    return xb, tb, mb
+    return xb.contiguous(), tb.contiguous(), mb.contiguous()
 
 
 def masked_bce_with_logits(logits, targets01, labeled_mask, pos_weight=1.0):
@@ -533,7 +544,8 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
     labeled[refined_pos_scr] = 1.0
     labeled[bg] = 1.0
 
-    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)  # 1x3xHxW
+    x_np = np.ascontiguousarray(img_rgb.transpose(2, 0, 1))
+    x = torch.from_numpy(x_np).unsqueeze(0).to(device)  # 1x3xHxW
     t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(device)        # 1x1xHxW
     m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to(device)       # 1x1xHxW
     # e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(device)
@@ -557,7 +569,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
 
         opt.zero_grad()
 
-        xb, tb, mb = augment_tensors(x, t, m, aug_prob=1.0)
+        xb, tb, mb = augment_tensors(x, t, m, aug_prob=0.9)
 
 
         logits = model(xb)
