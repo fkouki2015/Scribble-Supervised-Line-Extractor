@@ -14,7 +14,7 @@ export default function App() {
   const [lr, setLr] = useState(1e-3);
   const [iters, setIters] = useState(400);
   const [thr, setThr] = useState(128);
-  const [frangiPercentile, setFrangiPercentile] = useState(99);
+  const [frangiPercentile, setFrangiPercentile] = useState(95);
 
   // 画像のURL
   const [imgUrl, setImgUrl] = useState("");
@@ -625,6 +625,7 @@ export default function App() {
               }}
               onPointerLeave={() => {
                 if (method === "frangi") return;
+                if (drawing) refineScribble(); // 描画中にキャンバス外へ出た場合
                 setDrawing(false);
                 last.current = null;
                 setCursorPos(null);
