@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 export default function App() {
   // UI上の状態
   const [imgFile, setImgFile] = useState(null);
-  const [method, setMethod] = useState("frangi");
+  const [method, setMethod] = useState("unet");
   const [useClahe, setUseClahe] = useState(false);
   const [claheClip, setClaheClip] = useState(2.0);
   const [claheGrid, setClaheGrid] = useState(8);
@@ -21,7 +21,6 @@ export default function App() {
   const [probUrl, setProbUrl] = useState("");
   const [frangiOutUrl, setFrangiOutUrl] = useState("");
   const [unetOutUrl, setUnetOutUrl] = useState("");
-
   // DOM要素への参照
   const imgRef = useRef(null);
   const scribbleRef = useRef(null);
@@ -31,12 +30,14 @@ export default function App() {
   const [drawing, setDrawing] = useState(false);
   const last = useRef(null); // {x:number, y:number}
   const [cursorPos, setCursorPos] = useState(null); // {x:number, y:number} | null
-  // Undo用履歴管理
-  const [history, setHistory] = useState([]);
+  // Undo, Redo用履歴管理
+  const historyRef = useRef([]);
+  const redoHistoryRef = useRef([]);
   const refineScribbleFn = useRef(null);
   // プログレスバー用
-  const [progress, setProgress] = useState({ it: 0, loss: 0 });
+  const [progress, setProgress] = useState({ it: 0, iters: 0, loss: 0 });
   const progressIntervalRef = useRef(null);
+
 
   // 描画状態保存
   const saveState = () => {
@@ -45,11 +46,33 @@ export default function App() {
     if (!scr) return;
     const ctx = scr.getContext("2d");
     const data = ctx.getImageData(0, 0, scr.width, scr.height);
-    setHistory((prev) => {
-      const newHistory = [...prev, data];
-      if (newHistory.length > 30) newHistory.shift(); // 履歴は直近30回まで
-      return newHistory;
-    });
+    historyRef.current.push(data);
+    if (historyRef.current.length > 200) historyRef.current.shift(); // 履歴は直近200回まで
+    redoHistoryRef.current = []; // 新たに更新したらRedo履歴をクリア
+  };
+
+  const undo = () => {
+    if (historyRef.current.length === 0) return;
+    const lastState = historyRef.current.pop();
+    const scr = scribbleRef.current;
+    if (scr) {
+      const ctx = scr.getContext("2d");
+      redoHistoryRef.current.push(ctx.getImageData(0, 0, scr.width, scr.height));
+      ctx.putImageData(lastState, 0, 0);
+      refineScribbleFn.current?.();
+    }
+  };
+
+  const redo = () => {
+    if (redoHistoryRef.current.length === 0) return;
+    const nextState = redoHistoryRef.current.pop();
+    const scr = scribbleRef.current;
+    if (scr) {
+      const ctx = scr.getContext("2d");
+      historyRef.current.push(ctx.getImageData(0, 0, scr.width, scr.height));
+      ctx.putImageData(nextState, 0, 0);
+      refineScribbleFn.current?.();
+    }
   };
 
   // 画像アップロード時の処理
@@ -302,21 +325,15 @@ export default function App() {
       // ユーザーが Input や Textarea にフォーカスしている場合はネイティブの Undo に任せる
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
         e.preventDefault();
-        setHistory((prev) => {
-          if (prev.length === 0) return prev; // 何も保存されていなければ何もしない
-          const newHistory = [...prev];
-          const lastState = newHistory.pop();
-          const scr = scribbleRef.current;
-          if (scr) {
-            scr.getContext("2d").putImageData(lastState, 0, 0);
-            if (refineScribbleFn.current !== null) {
-              refineScribbleFn.current();
-            }
-          }
-          return newHistory;
-        });
+        redo();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyZ') {
+        e.preventDefault();
+        redo();
+      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyZ') {
+        e.preventDefault();
+        undo();
       }
     };
 
@@ -347,7 +364,8 @@ export default function App() {
       octx.clearRect(0, 0, out.width, out.height);
 
       // 履歴リセット
-      setHistory([]);
+      historyRef.current = [];
+      redoHistoryRef.current = [];
     };
 
     // 読み込まれたときにonLoadを実行
@@ -470,91 +488,46 @@ export default function App() {
         boxSizing: "border-box",
       }}
     >
-      <h2>Scribble-Supervised Line Extractor - 線画抽出器</h2>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(e) => {
-          const f = e.target.files && e.target.files[0];
-          if (f) onUpload(f);
-        }}
-      />
+      <h2 style={{ marginTop: -5, marginBottom: -5 }}>Scribble-Supervised Line Extractor - 線画抽出器</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => {
+            const f = e.target.files && e.target.files[0];
+            if (f) onUpload(f);
+          }}
+        />
 
-      <button onClick={saveAlphaPng}>線画を保存</button>
+        <span>最大解像度</span>
+        <input
+          type="number"
+          min={256}
+          step={256}
+          value={maxSize}
+          onChange={(e) => setMaxSize(e.target.value)}
+          onBlur={() => refineScribble()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.target.blur(); // Enterを押したらフォーカスを外す
+            }
+          }}
+          style={{ width: 90 }}
+        />
+        <button onClick={saveAlphaPng}>線画を保存</button>
+
+        <span style={{ marginBottom: 70 }}></span>
+      </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
         <span>方式:</span>
+        <button onClick={() => setMethod("unet")} style={{ opacity: method === "unet" ? 1 : 0.6 }}>
+          U-Net
+        </button>
         <button onClick={() => setMethod("frangi")} style={{ opacity: method === "frangi" ? 1 : 0.6 }}>
           Frangi（高速）
         </button>
-        <button onClick={() => setMethod("unet")} style={{ opacity: method === "unet" ? 1 : 0.6 }}>
-          U-Net（低速）
-        </button>
         <span style={{ marginLeft: 20 }}></span>
-        {method === "unet" ? (
-          <>
-            <button onClick={clearScribble} disabled={!imgUrl}>スクリブル消去</button>
-
-            {/* <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span>Threshold</span>
-              <input
-                type="range"
-                min={0}
-                max={255}
-                value={thr}
-                onChange={(e) => setThr(parseInt(e.target.value, 10))}
-              />
-              <span>{thr}</span>
-            </div> */}
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span>ペンの太さ</span>
-              <input
-                type="range"
-                min={1}
-                max={300}
-                value={lineWidth}
-                onChange={(e) => setLineWidth(parseInt(e.target.value, 10))}
-              />
-              <span>{lineWidth}</span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span>最大解像度</span>
-              <input
-                type="number"
-                min={256}
-                step={256}
-                value={maxSize}
-                onChange={(e) => setMaxSize(e.target.value)}
-                style={{ width: 90 }}
-              />
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span>ツール:</span>
-              <label>
-                <input type="radio" value="scribble" checked={penType === "scribble"} onChange={(e) => setPenType(e.target.value)} /> ペン
-              </label>
-              <label>
-                <input type="radio" value="erase" checked={penType === "erase"} onChange={(e) => setPenType(e.target.value)} /> 消しゴム
-              </label>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8, opacity: penType === "erase" ? 0.5 : 1, pointerEvents: penType === "erase" ? "none" : "auto" }}>
-              <span>線画/背景:</span>
-              <label>
-                <input type="radio" value="rgb(0,255,0)" checked={scribbleColor === "rgb(0,255,0)"} onChange={(e) => setScribbleColor(e.target.value)} /> 線画
-              </label>
-              <label>
-                <input type="radio" value="rgb(255,0,0)" checked={scribbleColor === "rgb(255,0,0)"} onChange={(e) => setScribbleColor(e.target.value)} /> 背景
-              </label>
-            </div>
-          </>
-        ) : (
-          <>
-          </>
-        )}
       </div>
 
 
@@ -564,7 +537,7 @@ export default function App() {
         {method === "frangi" ? (
           <>
             <button onClick={computeFrangi} disabled={!imgUrl}>線画抽出</button>
-            <span style={{ opacity: frangiOutUrl ? 1 : 0.4 }}>パーセンタイル</span>
+            <span style={{ opacity: frangiOutUrl ? 1 : 0.4, pointerEvents: frangiOutUrl ? "auto" : "none" }}>パーセンタイル</span>
             <input
               type="range"
               min={80}
@@ -589,14 +562,17 @@ export default function App() {
                 setFrangiPercentile(e.target.value);
                 applyPercentile(e.target.value);
               }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.target.blur(); // Enterを押したらフォーカスを外す
+                }
+              }}
               style={{ width: 70 }}
             />
           </>
         ) : (
           <>
-            <button onClick={refineScribble} disabled={!imgUrl}>スクリブルの線画化</button>
             <button onClick={predict} disabled={!imgUrl}>全体の線画を生成</button>
-            <button onClick={cancelPrediction} disabled={!imgUrl}>生成をキャンセル</button>
             <span>学習率</span>
             <input
               type="number"
@@ -604,6 +580,11 @@ export default function App() {
               step={1e-7}
               value={lr}
               onChange={(e) => setLr(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.target.blur(); // Enterを押したらフォーカスを外す
+                }
+              }}
               style={{ width: 90 }}
             />
             <span>学習ステップ数</span>
@@ -613,11 +594,13 @@ export default function App() {
               step={100}
               value={iters}
               onChange={(e) => setIters(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.target.blur(); // Enterを押したらフォーカスを外す
+                }
+              }}
               style={{ width: 90 }}
             />
-            生成進捗
-            <progress value={progress.it} max={iters} style={{ width: "300px" }} />
-            {progress.it} / {iters} (損失: {progress.loss.toFixed(4)})
           </>
         )}
 
@@ -625,8 +608,59 @@ export default function App() {
       </div>
 
 
-      {imgUrl && (
+      {/* 描画ツール */}
+      {(
         <div style={{ display: "flex", gap: 16 }}>
+          <div style={{
+            display: "grid",
+            alignItems: "center",
+            gap: 8,
+            width: "140px",
+            height: "500px",
+            padding: 8,
+            border: "1px solid #6d6d6d",
+            borderRadius: 12,
+            opacity: method === "frangi" ? 0 : 1,
+            pointerEvents: method === "frangi" ? "none" : "auto",
+          }}>
+            <div style={{ display: "grid", alignItems: "center", gap: 8 }}>
+              <span>ペンの太さ:</span>
+              <input
+                type="range"
+                min={1}
+                max={100}
+                value={lineWidth}
+                onChange={(e) => setLineWidth(parseInt(e.target.value, 10))}
+              />
+              <span>{lineWidth}px</span>
+            </div>
+            <div style={{ display: "grid", alignItems: "center", gap: 8 }}>
+              <span>ツール:</span>
+              <label>
+                <input type="radio" value="scribble" checked={penType === "scribble"} onChange={(e) => setPenType(e.target.value)} /> ペン
+              </label>
+              <label>
+                <input type="radio" value="erase" checked={penType === "erase"} onChange={(e) => setPenType(e.target.value)} /> 消しゴム
+              </label>
+            </div>
+
+            <div style={{ display: "grid", alignItems: "center", gap: 8, opacity: penType === "erase" ? 0.5 : 1, pointerEvents: penType === "erase" ? "none" : "auto" }}>
+              <span>ペン種類:</span>
+              <label>
+                <input type="radio" value="rgb(0,255,0)" checked={scribbleColor === "rgb(0,255,0)"} onChange={(e) => setScribbleColor(e.target.value)} /> 線画
+              </label>
+              <label>
+                <input type="radio" value="rgb(255,0,0)" checked={scribbleColor === "rgb(255,0,0)"} onChange={(e) => setScribbleColor(e.target.value)} /> 背景
+              </label>
+            </div>
+            {/* <button style={{ width: "140px" }} onClick={refineScribble} disabled={!imgUrl}>スクリブル<br />線画化</button> */}
+            <button style={{ width: "140px" }} onClick={clearScribble} disabled={!imgUrl}>スクリブル<br />消去</button>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <button style={{ width: "65px" }} onClick={undo} disabled={!imgUrl}>取り消し</button>
+              <button style={{ width: "65px" }} onClick={redo} disabled={!imgUrl}>やり直し</button>
+            </div>
+          </div>
+
           {/* 左側: 入力画像とスクリブル */}
           <div style={{ position: "relative", display: "inline-block" }}>
             <img
@@ -723,6 +757,26 @@ export default function App() {
               }}
             />
           </div>
+        </div>
+      )}
+
+      {/* 生成進捗*/}
+      {method === "unet" && (
+        <div style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: "10px 20px",
+          borderTop: "1px solid #6d6d6d",
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+        }}>
+          <span>生成進捗</span>
+          <progress value={progress.it} max={progress.iters} style={{ width: "400px" }} />
+          <span>{progress.it} / {progress.iters} (損失: {progress.loss.toFixed(4)})</span>
+          <button onClick={cancelPrediction} disabled={!imgUrl}>生成をキャンセル</button>
         </div>
       )}
     </div>
