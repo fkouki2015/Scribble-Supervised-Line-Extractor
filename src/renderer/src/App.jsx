@@ -19,8 +19,8 @@ export default function App() {
   const [imgUrl, setImgUrl] = useState('')
   const [frangiOutUrl, setFrangiOutUrl] = useState('')
   const [unetOutUrl, setUnetOutUrl] = useState('')
-
   const probUrl = method === 'frangi' ? frangiOutUrl : unetOutUrl
+
   // DOM要素への参照
   const imgRef = useRef(null)
   const scribbleRef = useRef(null)
@@ -30,23 +30,34 @@ export default function App() {
   const [drawing, setDrawing] = useState(false)
   const last = useRef(null) // {x:number, y:number}
   const [cursorPos, setCursorPos] = useState(null) // {x:number, y:number} | null
+
   // Undo, Redo用履歴管理
   const historyRef = useRef([])
   const redoHistoryRef = useRef([])
+  const [histLength, setHistLength] = useState(0) // 履歴の長さ（UI更新用）
+  const [redoHistLength, setRedoHistLength] = useState(0) // Redo履歴の長さ（UI更新用）
+
   // プログレスバー用
   const [progress, setProgress] = useState({ it: 0, iters: 0, loss: 0 })
   const progressIntervalRef = useRef(null)
 
+  // ウィンドウサイズ変更時のキャンバスサイズ調整
   const [canvasSize, setCanvasSize] = useState(() => ({
     width: window.innerWidth * 0.45,
     height: window.innerHeight - 300
   }))
+
+  // 画像の表示サイズ
+  const [imgSize, setImgSize] = useState({ width: 0, height: 0 })
+
+  // 画像の拡大縮小移動の状態
   const [canvasTransform, setCanvasTransform] = useState({
     clicked: false,
     scale: 1,
     offset: { x: 0, y: 0 }
   })
 
+  // ここから描画関連の関数
   // 描画状態保存
   const saveState = () => {
     const scr = scribbleRef.current
@@ -55,18 +66,19 @@ export default function App() {
     const ctx = scr.getContext('2d')
     const data = ctx.getImageData(0, 0, scr.width, scr.height)
     historyRef.current.push(data)
-    if (historyRef.current.length > 200) historyRef.current.shift() // 履歴は直近200回まで
     redoHistoryRef.current = [] // 新たに更新したらRedo履歴をクリア
+    setHistLength(historyRef.current.length)
+    setRedoHistLength(redoHistoryRef.current.length)
+    if (historyRef.current.length > 200) historyRef.current.shift() // 履歴は直近200回まで
   }
 
-  // 画像アップロード時の処理
+  // 画像アップロード時の処理（URL関連の初期化）
   const onUpload = (file) => {
     setImgFile(file)
     const url = URL.createObjectURL(file)
     setImgUrl(url)
     setFrangiOutUrl('')
     setUnetOutUrl('')
-    setCanvasTransform({ clicked: false, scale: 1, offset: { x: 0, y: 0 } })
   }
 
   // スクリブル描画
@@ -75,7 +87,6 @@ export default function App() {
     if (!scr) return
     const ctx = scr.getContext('2d')
 
-    // スケール補正
     const rect = scr.getBoundingClientRect()
     const displayScale = rect.width / scr.width
 
@@ -102,14 +113,12 @@ export default function App() {
     const scr = scribbleRef.current
     if (!scr) return { x: 0, y: 0 }
 
-    // スケール補正
     const rect = scr.getBoundingClientRect()
-    const sx = scr.width / rect.width
-    const sy = scr.height / rect.height
+    const scale = rect.width / scr.width
 
     return {
-      x: (e.clientX - rect.left) * sx,
-      y: (e.clientY - rect.top) * sy
+      x: (e.clientX - rect.left) / scale,
+      y: (e.clientY - rect.top) / scale
     }
   }
 
@@ -228,13 +237,8 @@ export default function App() {
       alert('スクリブルがありません．')
       return
     }
-
-    const blob_scr = await new Promise((resolve) => scr.toBlob((b) => resolve(b), 'image/png'))
-
-    if (!blob_scr) {
-      alert('スクリブル画像の取得に失敗しました')
-      return
-    }
+    // refineScribbleを待ってから予測を開始
+    await refineScribble()
 
     // プログレスバー更新
     progressIntervalRef.current = setInterval(async () => {
@@ -278,8 +282,8 @@ export default function App() {
   const cancelPrediction = async () => {
     try {
       await fetch('http://127.0.0.1:8000/api/cancel_prediction', { method: 'POST' })
-    } catch (e) {
-      console.warn('キャンセルリクエスト失敗:', e)
+    } catch (error) {
+      alert('キャンセルリクエストの送信に失敗しました．: ' + error.message)
     }
     // インターバルを止める
     if (progressIntervalRef.current) {
@@ -296,6 +300,9 @@ export default function App() {
       const ctx = scr.getContext('2d')
       redoHistoryRef.current.push(ctx.getImageData(0, 0, scr.width, scr.height))
       ctx.putImageData(lastState, 0, 0)
+      // 履歴の長さを更新
+      setHistLength(historyRef.current.length)
+      setRedoHistLength(redoHistoryRef.current.length)
       refineScribble()
     }
   }, [refineScribble])
@@ -309,6 +316,8 @@ export default function App() {
       const ctx = scr.getContext('2d')
       historyRef.current.push(ctx.getImageData(0, 0, scr.width, scr.height))
       ctx.putImageData(nextState, 0, 0)
+      setHistLength(historyRef.current.length)
+      setRedoHistLength(redoHistoryRef.current.length)
       refineScribble()
     }
   }, [refineScribble])
@@ -376,6 +385,7 @@ export default function App() {
     }
   }
 
+  // ここからuseEffect
   // 画面更新時，キーイベントリスナーを設定
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -407,6 +417,7 @@ export default function App() {
     if (!img || !scr || !out) return
 
     const onLoad = () => {
+      // 内部サイズを画像の元サイズに合わせる
       scr.width = img.naturalWidth
       scr.height = img.naturalHeight
       out.width = img.naturalWidth
@@ -420,6 +431,26 @@ export default function App() {
       const octx = out.getContext('2d')
       octx.clearRect(0, 0, out.width, out.height)
 
+      // キャンバスサイズ
+      const canvasW = canvasSize.width
+      const canvasH = canvasSize.height
+      // 画像の元サイズ
+      const imgW = img.naturalWidth
+      const imgH = img.naturalHeight
+      // 縮小スケールを計算
+      const scale = Math.min(canvasW / imgW, canvasH / imgH)
+      setImgSize({
+        width: imgW * scale,
+        height: imgH * scale
+      })
+
+      // 中央においたときの余白
+      const offset = {
+        x: (canvasW - imgW * scale) / 2,
+        y: (canvasH - imgH * scale) / 2
+      }
+      setCanvasTransform({ clicked: false, scale: 1, offset: offset })
+
       // 履歴リセット
       historyRef.current = []
       redoHistoryRef.current = []
@@ -428,7 +459,7 @@ export default function App() {
     // 読み込まれたときにonLoadを実行
     img.addEventListener('load', onLoad)
     return () => img.removeEventListener('load', onLoad)
-  }, [imgUrl])
+  }, [canvasSize.height, canvasSize.width, imgUrl])
 
   // probをout canvasに表示
   useEffect(() => {
@@ -466,6 +497,7 @@ export default function App() {
     return () => window.removeEventListener('resize', calcViewSize)
   })
 
+  // UI描画
   return (
     <div
       style={{
@@ -689,16 +721,20 @@ export default function App() {
             </label>
           </div>
           {/* <button style={{ width: '140px' }} onClick={refineScribble} disabled={!imgUrl}>スクリブル<br />線画化</button> */}
-          <button style={{ width: '140px' }} onClick={clearScribble} disabled={!imgUrl}>
+          <button style={{ width: '140px' }} onClick={clearScribble}>
             スクリブル
             <br />
             消去
           </button>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <button style={{ width: '65px' }} onClick={undo} disabled={!imgUrl}>
+            <button style={{ width: '65px' }} onClick={undo} disabled={!imgUrl || histLength === 0}>
               取り消し
             </button>
-            <button style={{ width: '65px' }} onClick={redo} disabled={!imgUrl}>
+            <button
+              style={{ width: '65px' }}
+              onClick={redo}
+              disabled={!imgUrl || redoHistLength === 0}
+            >
               やり直し
             </button>
           </div>
@@ -712,9 +748,11 @@ export default function App() {
             width: canvasSize.width,
             height: canvasSize.height,
             border: '1px solid gray',
-            backgroundColor: 'white',
-            overflow: 'hidden'
+            backgroundColor: 'lightgray',
+            overflow: 'hidden',
+            cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none'
           }}
+          // スクロール時
           onWheel={(e) => {
             if (!imgUrl) return
             e.preventDefault()
@@ -741,10 +779,12 @@ export default function App() {
               }
             })
           }}
+          // クリック時
           onPointerDown={(e) => {
             if (!imgUrl) return
+            e.preventDefault()
             if (e.button === 1 || (e.button === 0 && method === 'frangi')) {
-              e.preventDefault()
+              e.currentTarget.setPointerCapture(e.pointerId)
               // 中ボタンドラッグでパン開始
               setCanvasTransform((prev) => ({
                 ...prev,
@@ -754,45 +794,63 @@ export default function App() {
                   y: prev.offset.y
                 }
               }))
+            } else if (e.button === 0 && method === 'unet') {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              saveState() // 描画開始前に履歴を保存
+              setDrawing(true)
+              last.current = null
+              const p = getPos(e)
+              drawLine(p.x, p.y)
             }
           }}
+          // ドラッグ時
           onPointerMove={(e) => {
             if (!imgUrl) return
-            e.preventDefault()
-            const dx = e.movementX
-            const dy = e.movementY
-            setCanvasTransform((prev) => {
-              if (!prev.clicked) return prev
-              return {
-                ...prev,
-                offset: {
-                  x: prev.offset.x + dx,
-                  y: prev.offset.y + dy
-                }
+            setCursorPos({ x: e.clientX, y: e.clientY, size: lineWidth })
+            if (e.target.hasPointerCapture(e.pointerId)) {
+              if (drawing) {
+                const p = getPos(e)
+                drawLine(p.x, p.y)
               }
-            })
+              setCanvasTransform((prev) => {
+                if (!prev.clicked) return prev
+                const dx = e.movementX
+                const dy = e.movementY
+                return {
+                  ...prev,
+                  offset: {
+                    x: prev.offset.x + dx,
+                    y: prev.offset.y + dy
+                  }
+                }
+              })
+            }
           }}
+          // ドラッグ終了
           onPointerUp={(e) => {
             if (!imgUrl) return
+            e.preventDefault()
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId)
+            }
             if (e.button === 1 || (e.button === 0 && method === 'frangi')) {
-              e.preventDefault()
               // ドラッグ終了
               setCanvasTransform((prev) => ({
                 ...prev,
                 clicked: false
               }))
+            } else if (e.button === 0 && method === 'unet') {
+              if (drawing) refineScribble() // 描画完了ごとに線画を更新
+              setDrawing(false)
+              last.current = null
             }
           }}
-          onPointerLeave={(e) => {
+          // キャンバス外に出たとき
+          onPointerLeave={() => {
             if (!imgUrl) return
-            if (e.buttons === 4 || (e.buttons === 1 && method === 'frangi')) {
-              e.preventDefault()
-              // キャンバス外へ出たらドラッグ終了
-              setCanvasTransform((prev) => ({
-                ...prev,
-                clicked: false
-              }))
-            }
+            setDrawing(false)
+            last.current = null
+            setCursorPos(null)
           }}
         >
           {/* 画像 */}
@@ -804,8 +862,8 @@ export default function App() {
               position: 'absolute',
               left: 0,
               top: 0,
-              width: '100%',
-              height: '100%',
+              width: `${imgSize.width}px`,
+              height: `${imgSize.height}px`,
               objectFit: 'contain',
               display: imgUrl ? 'block' : 'none',
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
@@ -820,45 +878,12 @@ export default function App() {
               position: 'absolute',
               left: 0,
               top: 0,
-              width: '100%',
-              height: '100%',
+              width: `${imgSize.width}px`,
+              height: `${imgSize.height}px`,
               objectFit: 'contain',
               opacity: method === 'frangi' || !imgUrl ? 0 : 0.7,
-              cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none',
-              pointerEvents: method === 'frangi' || !imgUrl ? 'none' : 'auto',
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
               transformOrigin: '0 0'
-            }}
-            onPointerDown={(e) => {
-              if (method === 'frangi' || !imgUrl || e.button !== 0) return
-              saveState() // 描画開始前に履歴を保存
-              setDrawing(true)
-              last.current = null
-              const p = getPos(e)
-              drawLine(p.x, p.y)
-            }}
-            onPointerMove={(e) => {
-              if (method === 'frangi' || !imgUrl) return
-              const p = getPos(e)
-
-              // カーソルサイズは画面上のピクセル（lineWidth）にそのまま合わせる
-              if (method !== 'frangi' && imgUrl)
-                setCursorPos({ x: e.clientX, y: e.clientY, size: lineWidth })
-              if (!drawing) return
-              drawLine(p.x, p.y)
-            }}
-            onPointerUp={() => {
-              if (method === 'frangi' || !imgUrl) return
-              setDrawing(false)
-              refineScribble() // 描画完了ごとに線画を更新
-              last.current = null
-            }}
-            onPointerLeave={() => {
-              if (method === 'frangi' || !imgUrl) return
-              if (drawing) refineScribble() // 描画中にキャンバス外へ出た場合
-              setDrawing(false)
-              last.current = null
-              setCursorPos(null)
             }}
           />
 
@@ -892,7 +917,85 @@ export default function App() {
             width: canvasSize.width,
             height: canvasSize.height,
             border: '1px solid gray',
-            backgroundColor: 'white'
+            backgroundColor: 'lightgray',
+            overflow: 'hidden'
+          }}
+          // スクロール時
+          onWheel={(e) => {
+            if (!imgUrl) return
+            e.preventDefault()
+            const rect = e.currentTarget.getBoundingClientRect()
+            // マウス位置をキャンバス内の座標に変換
+            const cx = e.clientX - rect.left
+            const cy = e.clientY - rect.top
+            setCanvasTransform((prev) => {
+              const scalePrev = prev.scale
+              // キャンバス内での画像位置
+              const zoomOffsetPrev = prev.offset
+              const newScale = Math.max(0.1, Math.min(10, scalePrev * Math.exp(-e.deltaY * 0.0004)))
+              // スクロール後のマウスと画像の距離
+              const distX = (cx - zoomOffsetPrev.x) * (newScale / scalePrev)
+              const distY = (cy - zoomOffsetPrev.y) * (newScale / scalePrev)
+
+              return {
+                ...prev,
+                scale: newScale,
+                offset: {
+                  x: cx - distX,
+                  y: cy - distY
+                }
+              }
+            })
+          }}
+          // クリック時
+          onPointerDown={(e) => {
+            if (!imgUrl) return
+            e.preventDefault()
+            if (e.button === 1 || e.button === 0) {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              // 中ボタンドラッグでパン開始
+              setCanvasTransform((prev) => ({
+                ...prev,
+                clicked: true,
+                offset: {
+                  x: prev.offset.x,
+                  y: prev.offset.y
+                }
+              }))
+            }
+          }}
+          // ドラッグ時
+          onPointerMove={(e) => {
+            if (!imgUrl) return
+            if (e.target.hasPointerCapture(e.pointerId)) {
+              setCanvasTransform((prev) => {
+                if (!prev.clicked) return prev
+                const dx = e.movementX
+                const dy = e.movementY
+                return {
+                  ...prev,
+                  offset: {
+                    x: prev.offset.x + dx,
+                    y: prev.offset.y + dy
+                  }
+                }
+              })
+            }
+          }}
+          // ドラッグ終了
+          onPointerUp={(e) => {
+            if (!imgUrl) return
+            e.preventDefault()
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId)
+            }
+            if (e.button === 1 || e.button === 0) {
+              // ドラッグ終了
+              setCanvasTransform((prev) => ({
+                ...prev,
+                clicked: false
+              }))
+            }
           }}
         >
           {/* 出力（二値化結果） */}
@@ -902,10 +1005,12 @@ export default function App() {
               position: 'absolute',
               left: 0,
               top: 0,
-              width: '100%',
-              height: '100%',
+              width: `${imgSize.width}px`,
+              height: `${imgSize.height}px`,
               objectFit: 'contain',
-              mixBlendMode: 'multiply' // 白背景に対して乗算
+              transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
+              transformOrigin: '0 0',
+              backgroundColor: 'white'
             }}
           />
         </div>
