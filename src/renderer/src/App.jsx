@@ -41,6 +41,11 @@ export default function App() {
     width: window.innerWidth * 0.45,
     height: window.innerHeight - 300
   }))
+  const [canvasTransform, setCanvasTransform] = useState({
+    clicked: false,
+    scale: 1,
+    offset: { x: 0, y: 0 }
+  })
 
   // 描画状態保存
   const saveState = () => {
@@ -61,6 +66,7 @@ export default function App() {
     setImgUrl(url)
     setFrangiOutUrl('')
     setUnetOutUrl('')
+    setCanvasTransform({ clicked: false, scale: 1, offset: { x: 0, y: 0 } })
   }
 
   // スクリブル描画
@@ -290,7 +296,7 @@ export default function App() {
       const ctx = scr.getContext('2d')
       redoHistoryRef.current.push(ctx.getImageData(0, 0, scr.width, scr.height))
       ctx.putImageData(lastState, 0, 0)
-      void refineScribble()
+      refineScribble()
     }
   }, [refineScribble])
 
@@ -303,16 +309,72 @@ export default function App() {
       const ctx = scr.getContext('2d')
       historyRef.current.push(ctx.getImageData(0, 0, scr.width, scr.height))
       ctx.putImageData(nextState, 0, 0)
-      void refineScribble()
+      refineScribble()
     }
   }, [refineScribble])
 
-  const calcViewSize = useCallback(() => {
-    setCanvasSize({
-      width: window.innerWidth * 0.45,
-      height: window.innerHeight - 300
-    })
-  }, [])
+  const saveAlphaPng = async () => {
+    const src = outRef.current
+    if (!src || !src.width || !src.height) {
+      alert('保存する画像がありません')
+      return
+    }
+
+    // 画像データを取得
+    const w = src.width
+    const h = src.height
+    const sctx = src.getContext('2d')
+    const srcData = sctx.getImageData(0, 0, w, h)
+    const d = srcData.data
+
+    // アルファ付きキャンバスを作成
+    const dstCanvas = document.createElement('canvas')
+    dstCanvas.width = w
+    dstCanvas.height = h
+    const dctx = dstCanvas.getContext('2d')
+    const out = dctx.createImageData(w, h)
+    const o = out.data
+
+    // probをalphaに変換
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i]
+      const g = d[i + 1]
+      const b = d[i + 2]
+      // Rec.709 luma approximation in 0..255
+      const y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+      const a = Math.max(0, Math.min(255, Math.round(255 - y)))
+
+      o[i] = r
+      o[i + 1] = g
+      o[i + 2] = b
+      o[i + 3] = a
+    }
+    dctx.putImageData(out, 0, 0)
+
+    const blob = await new Promise((resolve) => dstCanvas.toBlob(resolve, 'image/png'))
+    if (!blob) {
+      alert('画像の保存に失敗しました．')
+      return
+    }
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'line_alpha.png'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const changeMethod = (nextMethod) => {
+    setMethod(nextMethod)
+    if (nextMethod === 'frangi') {
+      setCursorPos(null)
+      setDrawing(false)
+      last.current = null
+    }
+  }
 
   // 画面更新時，キーイベントリスナーを設定
   useEffect(() => {
@@ -392,73 +454,17 @@ export default function App() {
     img.src = probUrl
   }, [probUrl])
 
+  // 画面サイズ変更時の処理
   useEffect(() => {
+    const calcViewSize = () => {
+      setCanvasSize({
+        width: window.innerWidth * 0.45,
+        height: window.innerHeight - 300
+      })
+    }
     window.addEventListener('resize', calcViewSize)
     return () => window.removeEventListener('resize', calcViewSize)
-  }, [calcViewSize])
-
-  const saveAlphaPng = async () => {
-    const src = outRef.current
-    if (!src || !src.width || !src.height) {
-      alert('保存する画像がありません')
-      return
-    }
-
-    // 画像データを取得
-    const w = src.width
-    const h = src.height
-    const sctx = src.getContext('2d')
-    const srcData = sctx.getImageData(0, 0, w, h)
-    const d = srcData.data
-
-    // アルファ付きキャンバスを作成
-    const dstCanvas = document.createElement('canvas')
-    dstCanvas.width = w
-    dstCanvas.height = h
-    const dctx = dstCanvas.getContext('2d')
-    const out = dctx.createImageData(w, h)
-    const o = out.data
-
-    // probをalphaに変換
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i]
-      const g = d[i + 1]
-      const b = d[i + 2]
-      // Rec.709 luma approximation in 0..255
-      const y = 0.2126 * r + 0.7152 * g + 0.0722 * b
-      const a = Math.max(0, Math.min(255, Math.round(255 - y)))
-
-      o[i] = r
-      o[i + 1] = g
-      o[i + 2] = b
-      o[i + 3] = a
-    }
-    dctx.putImageData(out, 0, 0)
-
-    const blob = await new Promise((resolve) => dstCanvas.toBlob(resolve, 'image/png'))
-    if (!blob) {
-      alert('画像の保存に失敗しました．')
-      return
-    }
-
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'line_alpha.png'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-  }
-
-  const changeMethod = (nextMethod) => {
-    setMethod(nextMethod)
-    if (nextMethod === 'frangi') {
-      setCursorPos(null)
-      setDrawing(false)
-      last.current = null
-    }
-  }
+  })
 
   return (
     <div
@@ -705,15 +711,108 @@ export default function App() {
             display: 'inline-block',
             width: canvasSize.width,
             height: canvasSize.height,
-            border: '1px solid gray'
+            border: '1px solid gray',
+            backgroundColor: 'white',
+            overflow: 'hidden'
+          }}
+          onWheel={(e) => {
+            if (!imgUrl) return
+            e.preventDefault()
+            const rect = e.currentTarget.getBoundingClientRect()
+            // マウス位置をキャンバス内の座標に変換
+            const cx = e.clientX - rect.left
+            const cy = e.clientY - rect.top
+            setCanvasTransform((prev) => {
+              const scalePrev = prev.scale
+              // キャンバス内での画像位置
+              const zoomOffsetPrev = prev.offset
+              const newScale = Math.max(0.1, Math.min(10, scalePrev * Math.exp(-e.deltaY * 0.0004)))
+              // スクロール後のマウスと画像の距離
+              const distX = (cx - zoomOffsetPrev.x) * (newScale / scalePrev)
+              const distY = (cy - zoomOffsetPrev.y) * (newScale / scalePrev)
+
+              return {
+                clicked: prev.clicked,
+                scale: newScale,
+                offset: {
+                  x: cx - distX,
+                  y: cy - distY
+                }
+              }
+            })
+          }}
+          onPointerDown={(e) => {
+            if (!imgUrl) return
+            if (e.button === 1 || (e.button === 0 && method === 'frangi')) {
+              e.preventDefault()
+              // 中ボタンドラッグでパン開始
+              setCanvasTransform((prev) => ({
+                clicked: true,
+                scale: prev.scale,
+                offset: {
+                  x: prev.offset.x,
+                  y: prev.offset.y
+                }
+              }))
+            }
+          }}
+          onPointerMove={(e) => {
+            if (!imgUrl) return
+            e.preventDefault()
+            const dx = e.movementX
+            const dy = e.movementY
+            setCanvasTransform((prev) => {
+              if (!prev.clicked) return prev
+              return {
+                clicked: prev.clicked,
+                scale: prev.scale,
+                offset: {
+                  x: prev.offset.x + dx,
+                  y: prev.offset.y + dy
+                }
+              }
+            })
+          }}
+          onPointerUp={(e) => {
+            if (!imgUrl) return
+            if (e.button === 1 || (e.button === 0 && method === 'frangi')) {
+              e.preventDefault()
+              // ドラッグ終了
+              setCanvasTransform((prev) => ({
+                clicked: false,
+                scale: prev.scale,
+                offset: prev.offset
+              }))
+            }
+          }}
+          onPointerLeave={(e) => {
+            if (!imgUrl) return
+            if (e.buttons === 4 || (e.buttons === 1 && method === 'frangi')) {
+              e.preventDefault()
+              // キャンバス外へ出たらドラッグ終了
+              setCanvasTransform((prev) => ({
+                clicked: false,
+                scale: prev.scale,
+                offset: prev.offset
+              }))
+            }
           }}
         >
+          {/* 画像 */}
           <img
             ref={imgRef}
             src={imgUrl}
             alt=""
             style={{
-              display: 'block'
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              display: imgUrl ? 'block' : 'none',
+              transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
+              transformOrigin: '0 0'
             }}
           />
 
@@ -726,12 +825,15 @@ export default function App() {
               top: 0,
               width: '100%',
               height: '100%',
+              objectFit: 'contain',
               opacity: method === 'frangi' || !imgUrl ? 0 : 0.7,
               cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none',
-              pointerEvents: method === 'frangi' || !imgUrl ? 'none' : 'auto'
+              pointerEvents: method === 'frangi' || !imgUrl ? 'none' : 'auto',
+              transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
+              transformOrigin: '0 0'
             }}
             onPointerDown={(e) => {
-              if (method === 'frangi' || !imgUrl) return
+              if (method === 'frangi' || !imgUrl || e.button !== 0) return
               saveState() // 描画開始前に履歴を保存
               setDrawing(true)
               last.current = null
@@ -792,14 +894,10 @@ export default function App() {
             flex: 1,
             width: canvasSize.width,
             height: canvasSize.height,
-            border: '1px solid gray'
+            border: '1px solid gray',
+            backgroundColor: 'white'
           }}
         >
-          <img
-            src={imgUrl}
-            alt="Output background"
-            style={{ width: '100%', height: 'auto', display: 'block', visibility: 'hidden' }}
-          />
           {/* 出力（二値化結果） */}
           <canvas
             ref={outRef}
@@ -809,8 +907,8 @@ export default function App() {
               top: 0,
               width: '100%',
               height: '100%',
-              mixBlendMode: 'multiply', // 白背景に対して乗算
-              pointerEvents: 'none'
+              objectFit: 'contain',
+              mixBlendMode: 'multiply' // 白背景に対して乗算
             }}
           />
         </div>
