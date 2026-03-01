@@ -41,10 +41,10 @@ export default function App() {
   const [progress, setProgress] = useState({ it: 0, iters: 0, loss: 0 })
   const progressIntervalRef = useRef(null)
 
-  // ウィンドウサイズ変更時のキャンバスサイズ調整
-  const [canvasSize, setCanvasSize] = useState(() => ({
-    width: window.innerWidth * 0.45,
-    height: window.innerHeight - 300
+  // ウィンドウサイズ
+  const [windowSize, setWindowSize] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight
   }))
 
   // 画像の表示サイズ
@@ -432,8 +432,8 @@ export default function App() {
       octx.clearRect(0, 0, out.width, out.height)
 
       // キャンバスサイズ
-      const canvasW = canvasSize.width
-      const canvasH = canvasSize.height
+      const canvasW = (windowSize.width - 156 - 64) / 2
+      const canvasH = windowSize.height - 252
       // 画像の元サイズ
       const imgW = img.naturalWidth
       const imgH = img.naturalHeight
@@ -459,7 +459,7 @@ export default function App() {
     // 読み込まれたときにonLoadを実行
     img.addEventListener('load', onLoad)
     return () => img.removeEventListener('load', onLoad)
-  }, [canvasSize.height, canvasSize.width, imgUrl])
+  }, [windowSize.height, windowSize.width, imgUrl])
 
   // probをout canvasに表示
   useEffect(() => {
@@ -488,9 +488,9 @@ export default function App() {
   // 画面サイズ変更時の処理
   useEffect(() => {
     const calcViewSize = () => {
-      setCanvasSize({
-        width: window.innerWidth * 0.45,
-        height: window.innerHeight - 300
+      setWindowSize({
+        width: window.innerWidth,
+        height: window.innerHeight
       })
     }
     window.addEventListener('resize', calcViewSize)
@@ -512,6 +512,38 @@ export default function App() {
       <h2 style={{ marginTop: -5, marginBottom: -5 }}>
         Scribble-Supervised Line Extractor - 線画抽出器
       </h2>
+
+      {/* 生成進捗*/}
+      {method === 'unet' && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 16,
+            right: 16,
+            padding: '10px 20px',
+            border: '1px solid gray',
+            borderRadius: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 16
+          }}
+        >
+          <span>生成進捗</span>
+          <progress
+            value={progress.it}
+            max={progress.iters}
+            style={{ width: windowSize.width - 1200 }}
+          />
+          <span>
+            {progress.it} / {progress.iters} (損失: {progress.loss.toFixed(4)})
+          </span>
+          <button onClick={cancelPrediction} disabled={!imgUrl}>
+            生成をキャンセル
+          </button>
+        </div>
+      )}
+
+      {/* ファイル選択 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <input
           type="file"
@@ -742,13 +774,14 @@ export default function App() {
 
         {/* 左側: 入力画像とスクリブル */}
         <div
+          className="viewer-panel"
           style={{
             position: 'relative',
             display: 'inline-block',
-            width: canvasSize.width,
-            height: canvasSize.height,
+            width: (windowSize.width - 156 - 64) / 2,
+            height: windowSize.height - 252,
             border: '1px solid gray',
-            backgroundColor: 'lightgray',
+            borderRadius: 12,
             overflow: 'hidden',
             cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none'
           }}
@@ -862,8 +895,8 @@ export default function App() {
               position: 'absolute',
               left: 0,
               top: 0,
-              width: `${imgSize.width}px`,
-              height: `${imgSize.height}px`,
+              width: imgSize.width,
+              height: imgSize.height,
               objectFit: 'contain',
               display: imgUrl ? 'block' : 'none',
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
@@ -878,8 +911,8 @@ export default function App() {
               position: 'absolute',
               left: 0,
               top: 0,
-              width: `${imgSize.width}px`,
-              height: `${imgSize.height}px`,
+              width: imgSize.width,
+              height: imgSize.height,
               objectFit: 'contain',
               opacity: method === 'frangi' || !imgUrl ? 0 : 0.7,
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
@@ -910,14 +943,13 @@ export default function App() {
 
         {/* 右側: 出力結果 */}
         <div
+          className="viewer-panel"
           style={{
             position: 'relative',
             display: 'inline-block',
             flex: 1,
-            width: canvasSize.width,
-            height: canvasSize.height,
             border: '1px solid gray',
-            backgroundColor: 'lightgray',
+            borderRadius: 12,
             overflow: 'hidden'
           }}
           // スクロール時
@@ -1005,8 +1037,8 @@ export default function App() {
               position: 'absolute',
               left: 0,
               top: 0,
-              width: `${imgSize.width}px`,
-              height: `${imgSize.height}px`,
+              width: imgSize.width,
+              height: imgSize.height,
               objectFit: 'contain',
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
               transformOrigin: '0 0',
@@ -1015,32 +1047,6 @@ export default function App() {
           />
         </div>
       </div>
-
-      {/* 生成進捗*/}
-      {method === 'unet' && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            padding: '10px 20px',
-            borderTop: '1px solid gray',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 16
-          }}
-        >
-          <span>生成進捗</span>
-          <progress value={progress.it} max={progress.iters} style={{ width: '400px' }} />
-          <span>
-            {progress.it} / {progress.iters} (損失: {progress.loss.toFixed(4)})
-          </span>
-          <button onClick={cancelPrediction} disabled={!imgUrl}>
-            生成をキャンセル
-          </button>
-        </div>
-      )}
     </div>
   )
 }

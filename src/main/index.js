@@ -32,7 +32,7 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1600,
     height: 900,
-    minWidth: 1200, // ここで最小の幅を指定
+    minWidth: 1400, // ここで最小の幅を指定
     minHeight: 850, // ここで最小の高さを指定
     show: false,
     autoHideMenuBar: true,

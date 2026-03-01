@@ -11,6 +11,9 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* 背景 */
+  --viewer-panel-bg: var(--background-color);
 }
 
 a {
@@ -59,10 +62,15 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
+.viewer-panel {
+  background-color: var(--viewer-panel-bg);
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
     background-color: #ffffff;
+    --viewer-panel-bg: rgb(237, 237, 237);
   }
   a:hover {
     color: #747bff;
