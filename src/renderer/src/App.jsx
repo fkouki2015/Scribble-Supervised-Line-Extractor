@@ -472,7 +472,7 @@ export default function App() {
         padding: 16,
         fontFamily: 'sans-serif',
         height: '100%',
-        overflowY: 'auto',
+        overflowY: 'hidden',
         overflowX: 'hidden',
         boxSizing: 'border-box'
       }}
@@ -732,7 +732,7 @@ export default function App() {
               const distY = (cy - zoomOffsetPrev.y) * (newScale / scalePrev)
 
               return {
-                clicked: prev.clicked,
+                ...prev,
                 scale: newScale,
                 offset: {
                   x: cx - distX,
@@ -747,8 +747,8 @@ export default function App() {
               e.preventDefault()
               // 中ボタンドラッグでパン開始
               setCanvasTransform((prev) => ({
+                ...prev,
                 clicked: true,
-                scale: prev.scale,
                 offset: {
                   x: prev.offset.x,
                   y: prev.offset.y
@@ -764,8 +764,7 @@ export default function App() {
             setCanvasTransform((prev) => {
               if (!prev.clicked) return prev
               return {
-                clicked: prev.clicked,
-                scale: prev.scale,
+                ...prev,
                 offset: {
                   x: prev.offset.x + dx,
                   y: prev.offset.y + dy
@@ -779,9 +778,8 @@ export default function App() {
               e.preventDefault()
               // ドラッグ終了
               setCanvasTransform((prev) => ({
-                clicked: false,
-                scale: prev.scale,
-                offset: prev.offset
+                ...prev,
+                clicked: false
               }))
             }
           }}
@@ -791,9 +789,8 @@ export default function App() {
               e.preventDefault()
               // キャンバス外へ出たらドラッグ終了
               setCanvasTransform((prev) => ({
-                clicked: false,
-                scale: prev.scale,
-                offset: prev.offset
+                ...prev,
+                clicked: false
               }))
             }
           }}
