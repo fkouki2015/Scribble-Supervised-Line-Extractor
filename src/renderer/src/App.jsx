@@ -425,7 +425,7 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (e) => {
       // ユーザーが Input や Textarea にフォーカスしている場合はネイティブの Undo に任せる
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      // if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
 
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
         e.preventDefault()
@@ -540,28 +540,28 @@ export default function App() {
   // UI描画
   return (
     <div
+      className="app-shell"
       style={{
         padding: 16,
-        fontFamily: 'sans-serif',
         height: '100%',
         overflowY: 'hidden',
         overflowX: 'hidden',
         boxSizing: 'border-box'
       }}
     >
-      <h2 style={{ marginTop: -5, marginBottom: -5 }}>
+      <h2 className="app-title" style={{ marginTop: -5, marginBottom: -5 }}>
         Scribble-Supervised Line Extractor - 線画抽出器
       </h2>
 
       {/* 生成進捗*/}
       {method === 'unet' && (
         <div
+          className="panel progress-panel"
           style={{
             position: 'fixed',
             top: 16,
             right: 16,
             padding: '10px 20px',
-            border: '1px solid gray',
             borderRadius: '12px',
             display: 'flex',
             alignItems: 'center',
@@ -591,6 +591,7 @@ export default function App() {
         </div>
       )}
       <div
+        className="panel history-panel"
         ref={historyScrollRef}
         onWheel={(e) => {
           e.preventDefault()
@@ -600,7 +601,6 @@ export default function App() {
           display: 'flex',
           gap: 8,
           flexWrap: 'nowrap',
-          border: '1px solid gray',
           position: 'fixed',
           top: 98,
           right: 16,
@@ -621,7 +621,7 @@ export default function App() {
               width: 92,
               height: 92,
               objectFit: 'cover',
-              border: url === probUrl ? '2px solid #1e88e5' : '1px solid gray',
+              border: url === probUrl ? '2px solid var(--accent)' : '1px solid var(--border)',
               boxSizing: 'border-box',
               opacity: url === probUrl ? 1 : 0.8,
               flexShrink: 0
@@ -769,6 +769,7 @@ export default function App() {
       <div style={{ display: 'flex', gap: 16 }}>
         {/* 描画ツール */}
         <div
+          className="panel toolbox-panel"
           style={{
             display: 'grid',
             alignItems: 'center',
@@ -776,7 +777,6 @@ export default function App() {
             width: '140px',
             height: '500px',
             padding: 8,
-            border: '1px solid gray',
             borderRadius: 12,
             opacity: method === 'frangi' ? 0 : 1,
             pointerEvents: method === 'frangi' ? 'none' : 'auto'
@@ -872,7 +872,7 @@ export default function App() {
             display: 'inline-block',
             width: (windowSize.width - 156 - 64) / 2,
             height: windowSize.height - 244,
-            border: '1px solid gray',
+            border: '1px solid var(--border)',
             borderRadius: 12,
             overflow: 'hidden',
             cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none'
@@ -1021,7 +1021,7 @@ export default function App() {
                 width: cursorPos.size,
                 height: cursorPos.size,
                 borderRadius: '50%',
-                border: '1px solid black',
+                border: '1px solid var(--text)',
                 backgroundColor: penType === 'erase' ? 'rgba(0,0,0,0.2)' : scribbleColor,
                 opacity: 0.3,
                 transform: 'translate(-50%, -50%)',
@@ -1039,7 +1039,7 @@ export default function App() {
             position: 'relative',
             display: 'inline-block',
             flex: 1,
-            border: '1px solid gray',
+            border: '1px solid var(--border)',
             borderRadius: 12,
             overflow: 'hidden'
           }}
@@ -1133,7 +1133,7 @@ export default function App() {
               objectFit: 'contain',
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
               transformOrigin: '0 0',
-              backgroundColor: 'white'
+              backgroundColor: 'var(--canvas-bg)'
             }}
           />
         </div>
