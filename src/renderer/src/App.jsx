@@ -43,6 +43,7 @@ export default function App() {
   const progressIntervalRef = useRef(null)
 
   const previewRef = useRef(null)
+  const refineReqSeqRef = useRef(0)
 
   // ウィンドウサイズ
   const [windowSize, setWindowSize] = useState(() => ({
@@ -198,6 +199,7 @@ export default function App() {
 
   // スクリブルの線画化（自動のみ）
   const refineScribble = useCallback(async () => {
+    const reqSeq = ++refineReqSeqRef.current
     const scr = scribbleRef.current
     if (!scr) {
       alert('スクリブルがありません．')
@@ -225,6 +227,9 @@ export default function App() {
       method: 'POST',
       body: formData
     })
+    // レスポンスが返ってきたときに、リクエストが最新かどうかを確認
+    if (reqSeq !== refineReqSeqRef.current) return
+
     if (!res.ok) {
       const data = await res.json()
       alert(data.error)
@@ -232,6 +237,7 @@ export default function App() {
     }
 
     const refinedBlob = await res.blob()
+    if (reqSeq !== refineReqSeqRef.current) return
     const url = URL.createObjectURL(refinedBlob)
     setUnetOutUrl(url)
   }, [imgFile, useClahe, claheClip, claheGrid, maxSize])
@@ -570,7 +576,7 @@ export default function App() {
           />
           <span
             style={{
-              display: 'inline-block',
+              display: 'block',
               minWidth: '18ch',
               textAlign: 'right',
               whiteSpace: 'nowrap',
@@ -615,10 +621,14 @@ export default function App() {
               width: 92,
               height: 92,
               objectFit: 'cover',
-              border: '1px solid gray',
+              border: url === probUrl ? '2px solid #1e88e5' : '1px solid gray',
+              boxSizing: 'border-box',
+              opacity: url === probUrl ? 1 : 0.8,
               flexShrink: 0
             }}
-            onClick={() => (method === 'frangi' ? setFrangiOutUrl(url) : setUnetOutUrl(url))}
+            onClick={() => {
+              method === 'frangi' ? setFrangiOutUrl(url) : setUnetOutUrl(url)
+            }}
           />
         ))}
       </div>
