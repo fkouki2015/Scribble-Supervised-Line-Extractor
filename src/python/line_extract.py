@@ -544,10 +544,10 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
     img_gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY)
 
     # edge = compute_edge_map(img_gray)
-    bg_auto = ring
+    bg_auto = ring & pos_scr
     bg = neg_scr | bg_auto
     # cv2.imwrite("debug_bg.png", bg.astype(np.uint8)*255)
-
+    
     target = np.zeros_like(img_gray, dtype=np.float32)
     labeled = np.zeros_like(img_gray, dtype=np.float32)
     target[refined_pos_scr] = 1.0
