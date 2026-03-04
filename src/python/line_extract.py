@@ -562,8 +562,8 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
 
     model = UNet(in_ch=3, base_ch=32).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=0.5, patience=200
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=lr * 10, total_steps=iters
     )
 
     pos_count = float(((t > 0.5) * (m > 0.5)).sum().item())
@@ -591,7 +591,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
         loss = (loss_bce + loss_dice)
         loss.backward()
         opt.step()
-        scheduler.step(loss.item())
+        scheduler.step()
         
         if progress_bar is not None:
             progress_bar(it + 1, iters, loss.item())

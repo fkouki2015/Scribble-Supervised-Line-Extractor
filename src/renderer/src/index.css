@@ -63,7 +63,11 @@ button:focus-visible {
 }
 
 .viewer-panel {
-  background-color: var(--viewer-panel-bg);
+  margin: 0;
+  background-position: 0px 0px, 10px 10px;
+  background-size: 20px 20px;
+  background-image: -webkit-linear-gradient(45deg, #eee 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc 100%),-webkit-linear-gradient(45deg, #ccc 25%, white 25%, white 75%, #ccc 75%, #eee 100%);
+  background-image: linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc 100%),linear-gradient(45deg, #ccc 25%, white 25%, white 75%, #ccc 75%, #ccc 100%);
 }
 
 @media (prefers-color-scheme: light) {

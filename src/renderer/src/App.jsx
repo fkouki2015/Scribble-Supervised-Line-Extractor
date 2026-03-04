@@ -25,6 +25,7 @@ export default function App() {
   const imgRef = useRef(null)
   const scribbleRef = useRef(null)
   const outRef = useRef(null)
+  const historyScrollRef = useRef(null)
 
   // 描画状態
   const [drawing, setDrawing] = useState(false)
@@ -56,6 +57,10 @@ export default function App() {
     scale: 1,
     offset: { x: 0, y: 0 }
   })
+  // 生成履歴
+  const [unetOutImages, setUnetOutImages] = useState([])
+  const [frangiOutImages, setFrangiOutImages] = useState([])
+  const outImages = method === 'frangi' ? frangiOutImages : unetOutImages
 
   // ここから描画関連の関数
   // 描画状態保存
@@ -156,12 +161,12 @@ export default function App() {
       return
     }
 
-    // 初回のpercentile適用
-    await _applyPercentile(frangiPercentile)
+    // 初回のpercentile適用（履歴に追加）
+    await _applyPercentile(frangiPercentile, true)
   }
 
   // Frangi応答のパーセンタイルを適用
-  const _applyPercentile = async (p) => {
+  const _applyPercentile = async (p, addToHistory = false) => {
     const formData = new FormData()
     formData.append('percentile', p)
     const res = await fetch('http://127.0.0.1:8000/api/apply_frangi_percentile', {
@@ -175,15 +180,18 @@ export default function App() {
     }
     const url = URL.createObjectURL(await res.blob())
     setFrangiOutUrl(url)
+    if (addToHistory) {
+      setFrangiOutImages((prev) => [...prev, url])
+    }
   }
 
   // Frangi応答のパーセンタイルを適用（スライダー用）
-  const applyPercentile = (p) => {
+  const applyPercentile = (p, addToHistory = false) => {
     if (!frangiOutUrl) {
       alert('Frangi応答がありません．')
       return
     }
-    _applyPercentile(p)
+    _applyPercentile(p, addToHistory)
   }
 
   // スクリブルの線画化（自動のみ）
@@ -276,6 +284,8 @@ export default function App() {
     const outBlob = await res.blob()
     const url = URL.createObjectURL(outBlob)
     setUnetOutUrl(url)
+    // 生成履歴に追加
+    setUnetOutImages((prev) => [...prev, url])
   }
 
   // 生成キャンセル
@@ -497,6 +507,11 @@ export default function App() {
     return () => window.removeEventListener('resize', calcViewSize)
   })
 
+  useEffect(() => {
+    if (!historyScrollRef.current) return
+    historyScrollRef.current.scrollLeft = historyScrollRef.current.scrollWidth
+  }, [outImages, method])
+
   // UI描画
   return (
     <div
@@ -542,6 +557,44 @@ export default function App() {
           </button>
         </div>
       )}
+      <div
+        ref={historyScrollRef}
+        onWheel={(e) => {
+          e.preventDefault()
+          e.currentTarget.scrollLeft += e.deltaY
+        }}
+        style={{
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'nowrap',
+          border: '1px solid gray',
+          position: 'fixed',
+          top: 98,
+          right: 16,
+          padding: 8,
+          borderRadius: 12,
+          width: (windowSize.width - 156 - 108) / 2,
+          height: 94,
+          overflowX: 'auto',
+          // overflowY: 'hidden',
+          scrollbarWidth: 'none'
+        }}
+      >
+        {outImages.map((url, index) => (
+          <img
+            key={index}
+            src={url}
+            style={{
+              width: 92,
+              height: 92,
+              objectFit: 'cover',
+              border: '1px solid gray',
+              flexShrink: 0
+            }}
+            onClick={() => (method === 'frangi' ? setFrangiOutUrl(url) : setUnetOutUrl(url))}
+          />
+        ))}
+      </div>
 
       {/* ファイル選択 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -616,6 +669,8 @@ export default function App() {
                 setFrangiPercentile(e.target.value)
                 applyPercentile(e.target.value)
               }}
+              onMouseUp={(e) => applyPercentile(e.currentTarget.value, true)}
+              onTouchEnd={(e) => applyPercentile(e.currentTarget.value, true)}
               style={{ width: 120 }}
             />
             <input
@@ -659,7 +714,7 @@ export default function App() {
             <span>学習ステップ数</span>
             <input
               type="number"
-              min={0}
+              min={100}
               step={100}
               value={iters}
               onChange={(e) => setIters(e.target.value)}
@@ -674,8 +729,8 @@ export default function App() {
         )}
       </div>
 
-      {/* 描画ツール */}
       <div style={{ display: 'flex', gap: 16 }}>
+        {/* 描画ツール */}
         <div
           style={{
             display: 'grid',
@@ -779,7 +834,7 @@ export default function App() {
             position: 'relative',
             display: 'inline-block',
             width: (windowSize.width - 156 - 64) / 2,
-            height: windowSize.height - 252,
+            height: windowSize.height - 244,
             border: '1px solid gray',
             borderRadius: 12,
             overflow: 'hidden',
@@ -890,7 +945,6 @@ export default function App() {
           <img
             ref={imgRef}
             src={imgUrl}
-            alt=""
             style={{
               position: 'absolute',
               left: 0,
