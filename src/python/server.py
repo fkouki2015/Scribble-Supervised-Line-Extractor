@@ -17,6 +17,7 @@ frangi_u8 = None
 refined_scr_u8 = None
 progress_data = {"it": 0, "iters": 0, "loss": 0}
 cancel_flag = threading.Event()
+preview_image = None
 
 @app.route("/api/cancel_prediction", methods=["POST"])
 def api_cancel_prediction():
@@ -30,6 +31,12 @@ def api_progress_bar():
     if progress_data is None:
         return {"error": "プログレスデータがありません．"}, 400
     return progress_data
+
+@app.route("/api/preview", methods=["GET"])
+def api_preview():
+    global preview_image
+    _, buf = cv2.imencode(".png", preview_image)
+    return send_file(io.BytesIO(buf), mimetype="image/png")
 
 # 画像を最大サイズにリサイズ
 def _resize_to_max(img, max_size: int, interpolation):
@@ -136,7 +143,7 @@ def api_refine_scribble():
 # 全体線画の生成
 @app.route("/api/predict_line", methods=["POST"])
 def api_predict_line():
-    global cancel_flag, progress_data
+    global cancel_flag, progress_data, preview_image
     lr = float(request.form.get("lr", 1e-3))
     iters = int(request.form.get("iters", 1000))
     max_size = int(request.form.get("max_size", 2000))
@@ -157,16 +164,32 @@ def api_predict_line():
 
     cancel_flag.clear()
     progress_data = {"it": 0, "iters": 0, "loss": 0}
+    preview_image = None
 
     def progress_bar(it, iters, loss):
         global progress_data
         progress_data["it"] = it
         progress_data["iters"] = iters
         progress_data["loss"] = loss
+    
+    def preview(out):
+        global preview_image
+        preview_image = out
 
     # 全体線画の生成
     try:
-        predicted_line = predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=progress_bar, max_size=max_size, cancel_flag=cancel_flag)
+        predicted_line = predict_line(
+            img_u8,
+            scr_u8,
+            refined_scr_u8,
+            lr,
+            iters,
+            device,
+            progress_bar=progress_bar,
+            preview=preview,
+            max_size=max_size,
+            cancel_flag=cancel_flag,
+        )
     except Exception as e:
         return {"error": f"線画の生成中にエラーが発生しました: {e}"}, 500
 

@@ -42,6 +42,8 @@ export default function App() {
   const [progress, setProgress] = useState({ it: 0, iters: 0, loss: 0 })
   const progressIntervalRef = useRef(null)
 
+  const previewRef = useRef(null)
+
   // ウィンドウサイズ
   const [windowSize, setWindowSize] = useState(() => ({
     width: window.innerWidth,
@@ -261,6 +263,18 @@ export default function App() {
       setProgress(data)
     }, 300)
 
+    previewRef.current = setInterval(async () => {
+      const res = await fetch('http://127.0.0.1:8000/api/preview')
+      if (!res.ok) {
+        const data = await res.json()
+        alert(data.error)
+        clearInterval(previewRef.current)
+        return
+      }
+      const url = URL.createObjectURL(await res.blob())
+      setUnetOutUrl(url)
+    }, 1000)
+
     // 全体線画を予測
     const formData = new FormData()
     formData.append('lr', lr)
@@ -275,11 +289,13 @@ export default function App() {
       const data = await res.json()
       alert(data.error)
       clearInterval(progressIntervalRef.current)
+      clearInterval(previewRef.current)
       return
     }
 
     // 完了時にインターバルを止める
     clearInterval(progressIntervalRef.current)
+    clearInterval(previewRef.current)
 
     const outBlob = await res.blob()
     const url = URL.createObjectURL(outBlob)
@@ -298,6 +314,9 @@ export default function App() {
     // インターバルを止める
     if (progressIntervalRef.current) {
       clearInterval(progressIntervalRef.current)
+    }
+    if (previewRef.current) {
+      clearInterval(previewRef.current)
     }
   }
 
@@ -549,7 +568,15 @@ export default function App() {
             max={progress.iters}
             style={{ width: windowSize.width - 1200 }}
           />
-          <span>
+          <span
+            style={{
+              display: 'inline-block',
+              minWidth: '18ch',
+              textAlign: 'right',
+              whiteSpace: 'nowrap',
+              fontVariantNumeric: 'tabular-nums'
+            }}
+          >
             {progress.it} / {progress.iters} (損失: {progress.loss.toFixed(4)})
           </span>
           <button onClick={cancelPrediction} disabled={!imgUrl}>

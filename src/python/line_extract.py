@@ -517,7 +517,7 @@ def apply_frangi_percentile(frangi_u8, percentile, img_u8, *, two_sided_delta=8.
     return blended
 
 
-def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=None, max_size=5000, cancel_flag=None):
+def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar=None, preview=None, max_size=5000, cancel_flag=None):
     img_u8 = _ensure_bgr_u8(img_u8)
     orig_h, orig_w = img_u8.shape[:2]
     if scr_u8.shape[2] == 4:
@@ -604,7 +604,11 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
             a = prob_tmp[:, :, np.newaxis].astype(np.float32)
             white = np.ones_like(img_u8, dtype=np.float32) * 255.0
             blended = img_u8.astype(np.float32) * a + white * (1.0 - a)
-            # cv2.imwrite(f"debug_out_{it}.png", blended.astype(np.uint8))
+            out = blended.astype(np.uint8)
+            if out.shape[:2] != (orig_h, orig_w):
+                out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+            if preview is not None:
+                preview(out)
 
     model.eval()
     with torch.no_grad():
