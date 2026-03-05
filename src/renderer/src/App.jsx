@@ -12,7 +12,7 @@ export default function App() {
   const [lineWidth, setLineWidth] = useState(30)
   const [penType, setPenType] = useState('scribble')
   const [scribbleColor, setScribbleColor] = useState('rgb(0,255,0)')
-  const [lr, setLr] = useState(1e-4)
+  const [lr, setLr] = useState(1e-3)
   const [iters, setIters] = useState(400)
   const [frangiPercentile, setFrangiPercentile] = useState(95)
 
@@ -541,7 +541,7 @@ export default function App() {
   // UI描画
   return (
     <div className="app-container">
-      <h2 className="app-title">Scribble-Supervised Line Extractor - 線画抽出AI</h2>
+      <h2 className="app-title">Scribble-Supervised Line Extractor - 線画抽出器</h2>
       {/* 生成進捗*/}
       <div
         className="progress-panel"
@@ -603,9 +603,7 @@ export default function App() {
           }}
         />
 
-        <span className="controls-label" style={{opacity: imgUrl ? 1 : 0.5}}>
-          最大解像度
-        </span>
+        <span className="controls-label">最大解像度</span>
         <input
           type="number"
           min={256}
@@ -613,7 +611,6 @@ export default function App() {
           value={maxSize}
           onChange={(e) => setMaxSize(e.target.value)}
           onBlur={() => refineScribble()}
-          disabled={!imgUrl}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.target.blur() // Enterを押したらフォーカスを外す
@@ -621,9 +618,7 @@ export default function App() {
           }}
           style={{ width: 90 }}
         />
-        <button onClick={saveAlphaPng} disabled={!probUrl}>
-          線画を保存
-        </button>
+        <button onClick={saveAlphaPng}>線画を保存</button>
       </div>
 
       <div className="controls-row" style={{ marginBottom: 8 }}>
@@ -632,13 +627,13 @@ export default function App() {
           className={`method-btn${method === 'unet' ? ' active' : ''}`}
           onClick={() => changeMethod('unet')}
         >
-          U-Net（AI）
+          U-Net
         </button>
         <button
           className={`method-btn${method === 'frangi' ? ' active' : ''}`}
           onClick={() => changeMethod('frangi')}
         >
-          Frangiフィルタ
+          Frangi（高速）
         </button>
       </div>
 
@@ -651,7 +646,7 @@ export default function App() {
             <span
               className="controls-label"
               style={{
-                opacity: frangiOutUrl ? 1 : 0.5,
+                opacity: frangiOutUrl ? 1 : 0.4,
                 pointerEvents: frangiOutUrl ? 'auto' : 'none'
               }}
             >
@@ -664,7 +659,6 @@ export default function App() {
               step={0.1}
               value={frangiPercentile}
               disabled={!frangiOutUrl}
-              pointerEvents={frangiOutUrl ? 'auto' : 'none'}
               onChange={(e) => {
                 setFrangiPercentile(e.target.value)
                 applyPercentile(e.target.value)
@@ -701,7 +695,7 @@ export default function App() {
             <input
               type="number"
               min={1e-7}
-              step="any"
+              step={1e-7}
               value={lr}
               onChange={(e) => setLr(e.target.value)}
               onKeyDown={(e) => {
@@ -807,7 +801,7 @@ export default function App() {
           <div className="tool-sep" />
           {/* <button style={{ width: '140px' }} onClick={refineScribble} disabled={!imgUrl}>スクリブル<br />線画化</button> */}
           <button style={{ width: '140px' }} onClick={clearScribble}>
-           すべて消去
+            スクリブル消去
           </button>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
             <button
