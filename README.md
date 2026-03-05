@@ -1,4 +1,4 @@
-# Scribble-Supervised Line Extractor
+# Scribble-Supervised Line Extractor: スクリブル教師学習による線画抽出機
 
 機械学習を用いた線画抽出ツールです。
 画像に線画領域、非線画領域を手書きで指定することで、AIが学習して線画を抽出します。
