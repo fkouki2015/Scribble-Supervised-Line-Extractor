@@ -10,7 +10,7 @@
 
 /* ===== タイトル ===== */
 .app-title {
-  margin: 0 0 16px 0;
+  margin: 0 0 18px 0;
   font-size: 1.2em;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -75,8 +75,8 @@
 }
 .history-thumb {
   border-radius: 6px;
-  width: 94px;
-  height: 94px;
+  width: 102px;
+  height: 102px;
   object-fit: cover;
   flex-shrink: 0;
   cursor: pointer;

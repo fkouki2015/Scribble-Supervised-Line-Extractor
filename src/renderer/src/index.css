@@ -57,10 +57,6 @@
   }
 }
 
-/* ===== リセット ===== */
-/* *, *::before, *::after {
-  box-sizing: border-box;
-} */
 
 body {
   margin: 0;
@@ -147,6 +143,17 @@ input[type='number']:disabled {
   opacity: 0.38;
 }
 
+/* number input の上下矢印を非表示 */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /* ===== ファイル入力 ===== */
 input[type='file'] {
   font-size: 0.82em;
@@ -231,4 +238,12 @@ progress::-webkit-progress-value {
 progress::-moz-progress-bar {
   background: linear-gradient(90deg, var(--color-accent-2), var(--color-accent));
   border-radius: 3px;
+}
+
+/* 文字選択不可能に */
+* {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
