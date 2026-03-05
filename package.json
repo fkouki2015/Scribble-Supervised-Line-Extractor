@@ -12,7 +12,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "postinstall": "electron-builder install-app-deps",
-    "build:python": "cd src/python && pyinstaller --onefile --name server server.py",
+    "build:python": "python -m venv .venv && .venv\\Scripts\\activate.bat && pip install -r requirements.txt && cd src\\python && pyinstaller --onefile --name server server.py",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && npm run build:python && electron-builder --win",
     "build:mac": "npm run build && npm run build:python && electron-builder --mac",
