@@ -575,6 +575,9 @@ export default function App() {
           height: 102
         }}
       >
+        <span className="history-label" style={{opacity: !probUrl ? 1 : 0}}>
+          生成履歴
+        </span>
         {outImages.map((url, index) => (
           <img
             key={index}

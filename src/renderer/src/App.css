@@ -73,6 +73,16 @@
 .history-panel::-webkit-scrollbar {
   display: none;
 }
+.history-label {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  margin-right: 8px;
+  position: absolute;
+  left: 8px;
+  top: 8px;
+}
 .history-thumb {
   border-radius: 6px;
   width: 102px;
