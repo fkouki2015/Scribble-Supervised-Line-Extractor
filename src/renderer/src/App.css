@@ -1,42 +1,217 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* ===== アプリコンテナ ===== */
+.app-container {
+  padding: 14px 16px;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  background-color: var(--color-bg);
+  color: var(--color-text);
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
-}
-
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* ===== タイトル ===== */
+.app-title {
+  margin: 0 0 20px 0;
+  font-size: 1.05em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  width: max-content;
+  color: var(--color-text-strong);
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-danger) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+/* ===== 生成進捗パネル ===== */
+.progress-panel {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  padding: 10px 16px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 4px 20px var(--color-shadow);
+  backdrop-filter: blur(6px);
+  z-index: 100;
+}
+.progress-label {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.progress-stat {
+  font-size: 0.82em;
+  color: var(--color-text-muted);
+  min-width: 18ch;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
 }
 
-.card {
-  padding: 2em;
+/* ===== 履歴パネル ===== */
+.history-panel {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  position: fixed;
+  top: 88px;
+  right: 16px;
+  padding: 7px;
+  border-radius: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  box-shadow: 0 4px 20px var(--color-shadow);
+}
+.history-panel::-webkit-scrollbar {
+  display: none;
+}
+.history-thumb {
+  border-radius: 6px;
+  width: 94px;
+  height: 94px;
+  object-fit: cover;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: opacity 0.15s, box-shadow 0.15s, border-color 0.15s;
+  box-sizing: border-box;
+}
+.history-thumb:hover {
+  opacity: 1 !important;
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
-.read-the-docs {
-  color: #888;
+/* ===== コントロール行 ===== */
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.controls-label {
+  font-size: 0.82em;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+/* ===== プライマリアクションボタン ===== */
+.btn-primary {
+  /* background: linear-gradient(135deg, var(--color-accent-2) 0%, var(--color-danger) 100%); */
+  border-color: linear-gradient(135deg, var(--color-accent-2) 0%, var(--color-danger) 100%);
+  /* color: #fff; */
+  font-size: 0.92em;
+  font-weight: 600;
+  padding: 0.55em 1.5em;
+  box-shadow: 0 2px 10px var(--color-accent-glow), 0 1px 3px var(--color-shadow);
+  letter-spacing: 0.02em;
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--color-accent) 0%, #748ffc 100%);
+  border-color: transparent;
+  box-shadow: 0 0 0 3px var(--color-accent-glow), 0 4px 16px var(--color-accent-glow);
+  transform: translateY(-1px);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 0 1px 4px var(--color-shadow);
+}
+.btn-primary:disabled {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  box-shadow: none;
+}
+
+/* ===== 方式切替ボタン ===== */
+.method-btn {
+  font-size: 0.82em;
+  padding: 0.4em 1em;
+  margin: 10px 0 10px 0;
+}
+.method-btn.active {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--color-accent-glow);
+}
+.method-btn:not(.active) {
+  opacity: 0.65;
+}
+.method-btn:not(.active):hover:not(:disabled) {
+  opacity: 1;
+}
+
+/* ===== ツールパネル ===== */
+.tool-panel {
+  display: grid;
+  align-items: start;
+  gap: 10px;
+  width: 144px;
+  padding: 12px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 20px var(--color-shadow);
+  flex-shrink: 0;
+  margin-top: 8px;
+}
+.tool-group {
+  display: grid;
+  align-items: center;
+  gap: 6px;
+}
+.tool-group-label {
+  font-size: 0.75em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tool-group label {
+  font-size: 0.84em;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 6px;
+  transition: background-color 0.14s;
+}
+.tool-group label:hover {
+  background-color: var(--color-surface-2);
+}
+.tool-sep {
+  height: 1px;
+  background-color: var(--color-border);
+  margin: 2px 0;
+}
+
+/* ===== ビューアーパネルのボーダーをテーマに合わせる ===== */
+.viewer-panel {
+    margin-top: 8px;
+    background-position: 0px 0px, 10px 10px;
+    background-size: 20px 20px;
+    background-image:
+    linear-gradient(45deg, var(--checker-a) 25%, transparent 25%, transparent 75%, var(--checker-a) 75%),
+    linear-gradient(45deg, var(--checker-a) 25%, var(--checker-b) 25%, var(--checker-b) 75%, var(--checker-a) 75%);
+
+  border: 1px solid var(--color-border) !important;
+  box-shadow: 0 4px 20px var(--color-shadow);
+}
+
+/* ===== 生成履歴がない時のプレースホルダーテキスト ===== */
+.history-empty {
+  font-size: 0.78em;
+  color: var(--color-text-muted);
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
 }

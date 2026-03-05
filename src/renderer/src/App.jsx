@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import './App.css'
 
 export default function App() {
   // UI上の状態
@@ -467,8 +468,8 @@ export default function App() {
       octx.clearRect(0, 0, out.width, out.height)
 
       // キャンバスサイズ
-      const canvasW = (windowSize.width - 156 - 64) / 2
-      const canvasH = windowSize.height - 252
+      const canvasW = (windowSize.width - 156 - 78) / 2
+      const canvasH = windowSize.height - 240
       // 画像の元サイズ
       const imgW = img.naturalWidth
       const imgH = img.naturalHeight
@@ -539,92 +540,50 @@ export default function App() {
 
   // UI描画
   return (
-    <div
-      className="app-shell"
-      style={{
-        padding: 16,
-        height: '100%',
-        overflowY: 'hidden',
-        overflowX: 'hidden',
-        boxSizing: 'border-box'
-      }}
-    >
-      <h2 className="app-title" style={{ marginTop: -5, marginBottom: -5 }}>
-        Scribble-Supervised Line Extractor - 線画抽出器
-      </h2>
-
+    <div className="app-container">
+      <h2 className="app-title">Scribble-Supervised Line Extractor - 線画抽出器</h2>
       {/* 生成進捗*/}
-      {method === 'unet' && (
-        <div
-          className="panel progress-panel"
-          style={{
-            position: 'fixed',
-            top: 16,
-            right: 16,
-            padding: '10px 20px',
-            borderRadius: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 16
-          }}
-        >
-          <span>生成進捗</span>
-          <progress
-            value={progress.it}
-            max={progress.iters}
-            style={{ width: windowSize.width - 1200 }}
-          />
-          <span
-            style={{
-              display: 'block',
-              minWidth: '18ch',
-              textAlign: 'right',
-              whiteSpace: 'nowrap',
-              fontVariantNumeric: 'tabular-nums'
-            }}
-          >
-            {progress.it} / {progress.iters} (損失: {progress.loss.toFixed(4)})
-          </span>
-          <button onClick={cancelPrediction} disabled={!imgUrl}>
-            生成をキャンセル
-          </button>
-        </div>
-      )}
       <div
-        className="panel history-panel"
+        className="progress-panel"
+        style={{
+          opacity: method === 'frangi' ? 0.5 : 1,
+          pointerEvents: method === 'frangi' ? 'none' : 'auto'
+        }}
+      >
+        <span className="progress-label">生成進捗</span>
+        <progress
+          value={progress.it}
+          max={progress.iters}
+          style={{ width: windowSize.width - 1100 }}
+        />
+        <span className="progress-stat">
+          {progress.it} / {progress.iters} (損失: {progress.loss.toFixed(4)})
+        </span>
+        <button onClick={cancelPrediction} disabled={!imgUrl}>
+          生成をキャンセル
+        </button>
+      </div>
+      <div
         ref={historyScrollRef}
+        className="history-panel"
         onWheel={(e) => {
           e.preventDefault()
           e.currentTarget.scrollLeft += e.deltaY
         }}
         style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'nowrap',
-          position: 'fixed',
-          top: 98,
-          right: 16,
-          padding: 8,
-          borderRadius: 12,
           width: (windowSize.width - 156 - 108) / 2,
-          height: 94,
-          overflowX: 'auto',
-          // overflowY: 'hidden',
-          scrollbarWidth: 'none'
+          height: 102
         }}
       >
         {outImages.map((url, index) => (
           <img
             key={index}
             src={url}
+            className="history-thumb"
             style={{
-              width: 92,
-              height: 92,
-              objectFit: 'cover',
-              border: url === probUrl ? '2px solid var(--accent)' : '1px solid var(--border)',
-              boxSizing: 'border-box',
-              opacity: url === probUrl ? 1 : 0.8,
-              flexShrink: 0
+              border:
+                url === probUrl ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+              opacity: url === probUrl ? 1 : 0.7
             }}
             onClick={() => {
               method === 'frangi' ? setFrangiOutUrl(url) : setUnetOutUrl(url)
@@ -634,7 +593,7 @@ export default function App() {
       </div>
 
       {/* ファイル選択 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="controls-row" style={{ marginTop: 6, marginBottom: 6 }}>
         <input
           type="file"
           accept="image/*"
@@ -644,7 +603,7 @@ export default function App() {
           }}
         />
 
-        <span>最大解像度</span>
+        <span className="controls-label">最大解像度</span>
         <input
           type="number"
           min={256}
@@ -660,34 +619,32 @@ export default function App() {
           style={{ width: 90 }}
         />
         <button onClick={saveAlphaPng}>線画を保存</button>
-
-        <span style={{ marginBottom: 70 }}></span>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-        <span>方式:</span>
+      <div className="controls-row" style={{ marginBottom: 8 }}>
+        <span className="controls-label">方式:</span>
         <button
+          className={`method-btn${method === 'unet' ? ' active' : ''}`}
           onClick={() => changeMethod('unet')}
-          style={{ opacity: method === 'unet' ? 1 : 0.6 }}
         >
           U-Net
         </button>
         <button
+          className={`method-btn${method === 'frangi' ? ' active' : ''}`}
           onClick={() => changeMethod('frangi')}
-          style={{ opacity: method === 'frangi' ? 1 : 0.6 }}
         >
           Frangi（高速）
         </button>
-        <span style={{ marginLeft: 20 }}></span>
       </div>
 
-      <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 12 }}>
+      <div className="controls-row" style={{ marginBottom: 8 }}>
         {method === 'frangi' ? (
           <>
-            <button onClick={computeFrangi} disabled={!imgUrl}>
+            <button className="btn-primary" onClick={computeFrangi} disabled={!imgUrl}>
               線画抽出
             </button>
             <span
+              className="controls-label"
               style={{
                 opacity: frangiOutUrl ? 1 : 0.4,
                 pointerEvents: frangiOutUrl ? 'auto' : 'none'
@@ -731,10 +688,10 @@ export default function App() {
           </>
         ) : (
           <>
-            <button onClick={predict} disabled={!imgUrl}>
+            <button className="btn-primary" onClick={predict} disabled={!imgUrl}>
               全体の線画を生成
             </button>
-            <span>学習率</span>
+            <span className="controls-label">学習率</span>
             <input
               type="number"
               min={1e-7}
@@ -748,7 +705,7 @@ export default function App() {
               }}
               style={{ width: 90 }}
             />
-            <span>学習ステップ数</span>
+            <span className="controls-label">学習ステップ数</span>
             <input
               type="number"
               min={100}
@@ -769,21 +726,16 @@ export default function App() {
       <div style={{ display: 'flex', gap: 16 }}>
         {/* 描画ツール */}
         <div
-          className="panel toolbox-panel"
+          className="tool-panel"
           style={{
-            display: 'grid',
-            alignItems: 'center',
-            gap: 8,
             width: '140px',
             height: '500px',
-            padding: 8,
-            borderRadius: 12,
-            opacity: method === 'frangi' ? 0 : 1,
+            opacity: method === 'frangi' ? 0.5 : 1,
             pointerEvents: method === 'frangi' ? 'none' : 'auto'
           }}
         >
-          <div style={{ display: 'grid', alignItems: 'center', gap: 8 }}>
-            <span>ペンの太さ:</span>
+          <div className="tool-group">
+            <span className="tool-group-label">ペンの太さ</span>
             <input
               type="range"
               min={1}
@@ -791,10 +743,13 @@ export default function App() {
               value={lineWidth}
               onChange={(e) => setLineWidth(parseInt(e.target.value, 10))}
             />
-            <span>{lineWidth}px</span>
+            <span style={{ fontSize: '0.8em', color: 'var(--color-text-muted)' }}>
+              {lineWidth}px
+            </span>
           </div>
-          <div style={{ display: 'grid', alignItems: 'center', gap: 8 }}>
-            <span>ツール:</span>
+          <div className="tool-sep" />
+          <div className="tool-group">
+            <span className="tool-group-label">ツール</span>
             <label>
               <input
                 type="radio"
@@ -815,16 +770,15 @@ export default function App() {
             </label>
           </div>
 
+          <div className="tool-sep" />
           <div
+            className="tool-group"
             style={{
-              display: 'grid',
-              alignItems: 'center',
-              gap: 8,
               opacity: penType === 'erase' ? 0.5 : 1,
               pointerEvents: penType === 'erase' ? 'none' : 'auto'
             }}
           >
-            <span>ペン種類:</span>
+            <span className="tool-group-label">ペン種類</span>
             <label>
               <input
                 type="radio"
@@ -844,18 +798,21 @@ export default function App() {
               背景
             </label>
           </div>
+          <div className="tool-sep" />
           {/* <button style={{ width: '140px' }} onClick={refineScribble} disabled={!imgUrl}>スクリブル<br />線画化</button> */}
           <button style={{ width: '140px' }} onClick={clearScribble}>
-            スクリブル
-            <br />
-            消去
+            スクリブル消去
           </button>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <button style={{ width: '65px' }} onClick={undo} disabled={!imgUrl || histLength === 0}>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <button
+              style={{ width: '62px', fontSize: '0.78em' }}
+              onClick={undo}
+              disabled={!imgUrl || histLength === 0}
+            >
               取り消し
             </button>
             <button
-              style={{ width: '65px' }}
+              style={{ width: '62px', fontSize: '0.78em' }}
               onClick={redo}
               disabled={!imgUrl || redoHistLength === 0}
             >
@@ -870,9 +827,8 @@ export default function App() {
           style={{
             position: 'relative',
             display: 'inline-block',
-            width: (windowSize.width - 156 - 64) / 2,
-            height: windowSize.height - 244,
-            border: '1px solid var(--border)',
+            width: (windowSize.width - 156 - 78) / 2,
+            height: windowSize.height - 240,
             borderRadius: 12,
             overflow: 'hidden',
             cursor: method === 'frangi' || !imgUrl ? 'auto' : 'none'
@@ -1021,7 +977,7 @@ export default function App() {
                 width: cursorPos.size,
                 height: cursorPos.size,
                 borderRadius: '50%',
-                border: '1px solid var(--text)',
+                border: '1px solid black',
                 backgroundColor: penType === 'erase' ? 'rgba(0,0,0,0.2)' : scribbleColor,
                 opacity: 0.3,
                 transform: 'translate(-50%, -50%)',
@@ -1039,7 +995,6 @@ export default function App() {
             position: 'relative',
             display: 'inline-block',
             flex: 1,
-            border: '1px solid var(--border)',
             borderRadius: 12,
             overflow: 'hidden'
           }}
@@ -1133,7 +1088,7 @@ export default function App() {
               objectFit: 'contain',
               transform: `translate(${canvasTransform.offset.x}px, ${canvasTransform.offset.y}px) scale(${canvasTransform.scale})`,
               transformOrigin: '0 0',
-              backgroundColor: 'var(--canvas-bg)'
+              backgroundColor: 'white'
             }}
           />
         </div>
