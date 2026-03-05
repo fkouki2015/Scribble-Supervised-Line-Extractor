@@ -11,7 +11,7 @@ let serverProcess = null
 function getPythonPath() {
   if (is.dev) {
     // 開発時: src/python/server.py を直接 python で実行
-    return null  // 後述
+    return null
   }
   // 本番: asar 展開済みのバイナリ（Windowsは.exe、Mac/Linuxは拡張子なし）
   const serverBin = process.platform === 'win32' ? 'server.exe' : 'server'
@@ -32,8 +32,8 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1600,
     height: 900,
-    minWidth: 1400, // ここで最小の幅を指定
-    minHeight: 850, // ここで最小の高さを指定
+    minWidth: 1200,
+    minHeight: 800,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
