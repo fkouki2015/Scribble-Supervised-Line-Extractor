@@ -80,8 +80,8 @@
   white-space: nowrap;
   margin-right: 8px;
   position: absolute;
-  left: 8px;
-  top: 8px;
+  left: 12px;
+  top: 10px;
 }
 .history-thumb {
   border-radius: 6px;

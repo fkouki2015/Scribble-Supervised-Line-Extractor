@@ -541,7 +541,7 @@ export default function App() {
   // UI描画
   return (
     <div className="app-container">
-      <h2 className="app-title">Scribble-Supervised Line Extractor - 線画抽出AI</h2>
+      <h2 className="app-title">Scribble-Supervised Line Extractor &mdash; 線画抽出AI</h2>
       {/* 生成進捗*/}
       <div
         className="progress-panel"
@@ -575,7 +575,7 @@ export default function App() {
           height: 102
         }}
       >
-        <span className="history-label" style={{opacity: !probUrl ? 1 : 0}}>
+        <span className="history-label" style={{opacity: outImages.length > 0 ? 0 : 1}}>
           生成履歴
         </span>
         {outImages.map((url, index) => (
