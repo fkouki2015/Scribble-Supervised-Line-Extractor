@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: ssle
+appId: com.fkouki2015.ssle
+productName: Scribble-Supervised Line Extractor
 directories:
   buildResources: build
 files:
@@ -11,17 +11,25 @@ files:
 asarUnpack:
   - resources/**
 extraResources:
-  - from: src/python/dist/server.exe
-    to: server.exe
-  - from: src/python/dist/server
-    to: server
+  - from: src/python/server.py
+    to: python/server.py
+  - from: src/python/line_extract.py
+    to: python/line_extract.py
+  - from: requirements.txt
+    to: python/requirements.txt
+  - from: resources/setup.html
+    to: setup.html
 win:
-  executableName: ssle
+  executableName: SSLE
+  target:
+    - target: nsis
+      arch: [x64]
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: setup-${name}.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  include: build/uninstaller.nsh
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -31,7 +39,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}.${ext}
 linux:
   target:
     - AppImage
@@ -40,7 +48,7 @@ linux:
   maintainer: electronjs.org
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}.${ext}
 npmRebuild: false
 publish:
   provider: generic

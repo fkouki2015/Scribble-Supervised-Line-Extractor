@@ -4,31 +4,170 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
 import { spawn } from 'child_process'
-import { createWriteStream, mkdirSync } from 'fs'
+import { createWriteStream, mkdirSync, existsSync, rmSync } from 'fs'
 
 let serverProcess = null
+let setupWindow = null
 
-function getPythonPath() {
+// ユーザーデータ内のvenvパス（本番用）
+function getVenvDir() {
+  return join(app.getPath('userData'), 'venv')
+}
+
+// Python実行ファイルのパス
+function getVenvPython() {
   if (is.dev) {
-    // 開発時: src/python/server.py を直接 python で実行
-    return null
+    // 開発時: プロジェクトルートの .venv を使う、なければ system python
+    const devVenv = join(__dirname, '../../.venv')
+    const devPython = process.platform === 'win32'
+      ? join(devVenv, 'Scripts', 'python.exe')
+      : join(devVenv, 'bin', 'python')
+    return existsSync(devPython) ? devPython : (process.platform === 'win32' ? 'python' : 'python3')
   }
-  // 本番: asar 展開済みのバイナリ（Windowsは.exe、Mac/Linuxは拡張子なし）
-  const serverBin = process.platform === 'win32' ? 'server.exe' : 'server'
-  return join(process.resourcesPath, serverBin)
+  const venvDir = getVenvDir()
+  return process.platform === 'win32'
+    ? join(venvDir, 'Scripts', 'python.exe')
+    : join(venvDir, 'bin', 'python')
+}
+
+// Pythonソースファイルのディレクトリ
+function getPythonSrcDir() {
+  if (is.dev) return join(__dirname, '../../src/python')
+  return join(process.resourcesPath, 'python')
+}
+
+// requirements.txtのパス
+function getRequirementsPath() {
+  if (is.dev) return join(__dirname, '../../requirements.txt')
+  return join(process.resourcesPath, 'python', 'requirements.txt')
 }
 
 function createServerLogStream() {
   const logDir = app.getPath('userData')
   mkdirSync(logDir, { recursive: true })
-  const logPath = join(logDir, 'server.log')
-  console.log('[App] Python server log:', logPath)
-  return createWriteStream(logPath, { flags: 'a' })
+  return createWriteStream(join(logDir, 'server.log'), { flags: 'a' })
 }
 
+function sendSetupLog(msg) {
+  if (setupWindow && !setupWindow.isDestroyed()) {
+    setupWindow.webContents.send('setup-log', msg)
+  }
+  console.log('[Setup]', msg)
+}
+
+// venv作成 → pip install を順に実行
+function runSetup() {
+  return new Promise((resolve, reject) => {
+    const venvDir = getVenvDir()
+    const pip = process.platform === 'win32'
+      ? join(venvDir, 'Scripts', 'pip.exe')
+      : join(venvDir, 'bin', 'pip')
+
+    sendSetupLog('Python仮想環境を作成中...')
+    const venvCreate = spawn('python', ['-m', 'venv', venvDir])
+    venvCreate.stdout.on('data', d => sendSetupLog(d.toString().trim()))
+    venvCreate.stderr.on('data', d => sendSetupLog(d.toString().trim()))
+    venvCreate.on('close', code => {
+      if (code !== 0) return reject(new Error(`venvの作成に失敗しました： (exit ${code})`))
+
+      sendSetupLog('依存パッケージをインストール中...')
+      const pipProc = spawn(pip, [
+        'install', '-r', getRequirementsPath(),
+        '--extra-index-url', 'https://download.pytorch.org/whl/cu126'
+      ])
+      pipProc.stdout.on('data', d => sendSetupLog(d.toString().trim()))
+      pipProc.stderr.on('data', d => sendSetupLog(d.toString().trim()))
+      pipProc.on('close', code => {
+        if (code !== 0) return reject(new Error(`パッケージインストールに失敗しました： (exit ${code})`))
+        resolve()
+      })
+    })
+  })
+}
+
+function startPythonServer() {
+  return new Promise((resolve, reject) => {
+    const python = getVenvPython()
+    const srcDir = getPythonSrcDir()
+    const logStream = createServerLogStream()
+    const ts = () => new Date().toISOString()
+    let resolved = false
+
+    const onReady = () => {
+      if (resolved) return
+      resolved = true
+      resolve()
+    }
+
+    serverProcess = spawn(python, [join(srcDir, 'server.py')], { cwd: srcDir })
+
+    serverProcess.stdout.on('data', d => {
+      const msg = d.toString()
+      logStream.write(`[${ts()}][out] ${msg}`)
+      console.log('[Python]', msg)
+      if (msg.includes('Running on http://127.0.0.1')) onReady()
+    })
+    serverProcess.stderr.on('data', d => {
+      const msg = d.toString()
+      logStream.write(`[${ts()}][err] ${msg}`)
+      console.error('[Python ERROR]', msg)
+      if (msg.includes('Running on http://127.0.0.1')) onReady()
+    })
+    serverProcess.on('close', code => {
+      logStream.write(`[${ts()}][exit] ${code}\n`)
+      console.log('[Python] exited with code', code)
+      if (!resolved) reject(new Error(`Pythonサーバーが起動前に終了しました： (exit ${code})`))
+    })
+
+    // 30秒以内に起動しなければタイムアウトで開く
+    setTimeout(onReady, 30000)
+  })
+}
+
+function createSetupWindow() {
+  setupWindow = new BrowserWindow({
+    width: 620,
+    height: 420,
+    resizable: false,
+    autoHideMenuBar: true,
+    title: 'セットアップ中...',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  })
+  const htmlPath = is.dev
+    ? join(__dirname, '../../resources/setup.html')
+    : join(process.resourcesPath, 'setup.html')
+  setupWindow.loadFile(htmlPath)
+}
+
+async function doSetup() {
+  try {
+    await runSetup()
+    sendSetupLog('\nセットアップが完了しました。サーバーを起動しています...')
+    await startPythonServer()
+    sendSetupLog('サーバーが起動しました。アプリを開いています...')
+    createWindow()
+    setTimeout(() => {
+      if (setupWindow && !setupWindow.isDestroyed()) setupWindow.close()
+      setupWindow = null
+    }, 1500)
+  } catch (err) {
+    sendSetupLog(`\nエラー: ${err.message}`)
+    if (setupWindow && !setupWindow.isDestroyed()) {
+      setupWindow.webContents.send('setup-error', err.message)
+    }
+  }
+}
+
+// 再試行: 部分的なvenvを削除して再実行
+ipcMain.handle('retry-setup', async () => {
+  try { rmSync(getVenvDir(), { recursive: true, force: true }) } catch (_) {}
+  await doSetup()
+})
 
 function createWindow() {
-  // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 1600,
     height: 900,
@@ -52,8 +191,6 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -61,58 +198,33 @@ function createWindow() {
   }
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  const pythonPath = getPythonPath()
-  if (pythonPath) {
-    // 本番: exe を直接実行 (cwd を resourcesPath に設定して temp/ を正しく作成)
-    const logStream = createServerLogStream()
-    const ts = () => new Date().toISOString()
-    serverProcess = spawn(pythonPath, [], { cwd: process.resourcesPath })
-    serverProcess.stdout.on('data', (data) => {
-      const msg = `[${ts()}][stdout] ${data.toString()}`
-      console.log('[Python]', data.toString())
-      logStream.write(msg)
-    })
-    serverProcess.stderr.on('data', (data) => {
-      const msg = `[${ts()}][stderr] ${data.toString()}`
-      console.error('[Python ERROR]', data.toString())
-      logStream.write(msg)
-    })
-    serverProcess.on('close', (code) => {
-      const msg = `[${ts()}][close] exited with code ${code}\n`
-      console.log('[Python] exited with code', code)
-      logStream.write(msg)
-    })
-  } else {
-    // 開発: python コマンドで src/python/server.py を実行
-    const serverDir = join(__dirname, '../../src/python')
-    serverProcess = spawn('python', [join(serverDir, 'server.py')], { cwd: serverDir })
-    serverProcess.stdout.on('data', (data) => console.log('[Python]', data.toString()))
-    serverProcess.stderr.on('data', (data) => console.error('[Python ERROR]', data.toString()))
-    serverProcess.on('close', (code) => console.log('[Python] exited with code', code))
-  }
+app.whenReady().then(async () => {
+  electronApp.setAppUserModelId('com.kouki.ssle')
 
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
-
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
   ipcMain.on('ping', () => console.log('pong'))
 
-  createWindow()
+  if (is.dev) {
+    // 開発時: セットアップ不要、そのままサーバーを起動
+    await startPythonServer()
+    createWindow()
+  } else {
+    const venvPython = getVenvPython()
+    if (existsSync(venvPython)) {
+      // セットアップ済み: そのまま起動
+      await startPythonServer()
+      createWindow()
+    } else {
+      // 初回: セットアップウィンドウを表示してからvenv構築
+      createSetupWindow()
+      setupWindow.webContents.once('did-finish-load', () => doSetup())
+    }
+  }
 
   app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
