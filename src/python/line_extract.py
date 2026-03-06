@@ -596,7 +596,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
         if progress_bar is not None:
             progress_bar(it + 1, iters, loss.item())
 
-        if (it + 1) % 100 == 0 or it == 0:
+        if (it + 1) % 10 == 0 or it == 0:
             model.eval()
             with torch.no_grad():
                 prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
