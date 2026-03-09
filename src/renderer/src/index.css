@@ -118,7 +118,7 @@ button:focus-visible {
 }
 button:disabled {
   opacity: 0.38;
-  cursor: not-allowed;
+  cursor:default;
 }
 
 /* ===== インプット ===== */
@@ -199,6 +199,9 @@ input[type='range']::-webkit-slider-thumb {
   cursor: pointer;
   transition: box-shadow 0.18s;
 }
+input[type='range']::-webkit-slider-thumb:disabled {
+  cursor: default
+}
 input[type='range']::-moz-range-thumb {
   width: 15px;
   height: 15px;
@@ -207,8 +210,12 @@ input[type='range']::-moz-range-thumb {
   border: none;
   cursor: pointer;
 }
+input[type='range']::-moz-range-thumb:disabled {
+  cursor: default;
+}
 input[type='range']:disabled {
   opacity: 0.38;
+  cursor: default;
 }
 
 /* ===== ラジオボタン ===== */

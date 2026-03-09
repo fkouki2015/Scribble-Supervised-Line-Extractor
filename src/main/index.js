@@ -63,8 +63,10 @@ function runSetup() {
       ? join(venvDir, 'Scripts', 'pip.exe')
       : join(venvDir, 'bin', 'pip')
 
+    const systemPython = process.platform === 'win32' ? 'python' : 'python3'
     sendSetupLog('Python仮想環境を作成中...')
-    const venvCreate = spawn('python', ['-m', 'venv', venvDir])
+    const venvCreate = spawn(systemPython, ['-m', 'venv', venvDir])
+    venvCreate.on('error', err => reject(new Error(`Pythonが見つかりません (${systemPython}): ${err.message}`)))
     venvCreate.stdout.on('data', d => sendSetupLog(d.toString().trim()))
     venvCreate.stderr.on('data', d => sendSetupLog(d.toString().trim()))
     venvCreate.on('close', code => {
@@ -75,6 +77,7 @@ function runSetup() {
         'install', '-r', getRequirementsPath(),
         '--extra-index-url', 'https://download.pytorch.org/whl/cu126'
       ])
+      pipProc.on('error', err => reject(new Error(`pipの実行に失敗しました (${pip}): ${err.message}`)))
       pipProc.stdout.on('data', d => sendSetupLog(d.toString().trim()))
       pipProc.stderr.on('data', d => sendSetupLog(d.toString().trim()))
       pipProc.on('close', code => {
@@ -100,6 +103,12 @@ function startPythonServer() {
     }
 
     serverProcess = spawn(python, [join(srcDir, 'server.py')], { cwd: srcDir })
+
+    serverProcess.on('error', err => {
+      logStream.write(`[${ts()}][fatal] ${err.message}\n`)
+      console.error('[Python ERROR]', err.message)
+      if (!resolved) reject(new Error(`Pythonサーバーの起動に失敗しました (${python}): ${err.message}`))
+    })
 
     serverProcess.stdout.on('data', d => {
       const msg = d.toString()

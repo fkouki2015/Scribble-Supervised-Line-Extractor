@@ -546,7 +546,7 @@ export default function App() {
       <div
         className="progress-panel"
         style={{
-          opacity: method === 'frangi' ? 0.5 : 1,
+          opacity: method === 'frangi' ? 0.4 : 1,
           pointerEvents: method === 'frangi' ? 'none' : 'auto'
         }}
       >
@@ -575,7 +575,7 @@ export default function App() {
           height: 102
         }}
       >
-        <span className="history-label" style={{opacity: outImages.length > 0 ? 0 : 1}}>
+        <span className="history-label" style={{ opacity: outImages.length > 0 ? 0 : 1}}>
           生成履歴
         </span>
         {outImages.map((url, index) => (
@@ -606,7 +606,7 @@ export default function App() {
           }}
         />
 
-        <span className="controls-label" style={{opacity: imgUrl ? 1 : 0.5}}>
+        <span className="controls-label" style={{ opacity: imgUrl ? 1 : 0.4 }}>
           最大解像度
         </span>
         <input
@@ -651,49 +651,48 @@ export default function App() {
             <button className="btn-primary" onClick={computeFrangi} disabled={!imgUrl}>
               線画抽出
             </button>
-            <span
-              className="controls-label"
+            <div
               style={{
-                opacity: frangiOutUrl ? 1 : 0.5,
-                pointerEvents: frangiOutUrl ? 'auto' : 'none'
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                opacity: !frangiOutUrl ? 0.4 : 1,
+                pointerEvents: !frangiOutUrl ? 'none' : 'auto'
               }}
             >
-              パーセンタイル
-            </span>
-            <input
-              type="range"
-              min={80}
-              max={100}
-              step={0.1}
-              value={frangiPercentile}
-              disabled={!frangiOutUrl}
-              pointerEvents={frangiOutUrl ? 'auto' : 'none'}
-              onChange={(e) => {
-                setFrangiPercentile(e.target.value)
-                applyPercentile(e.target.value)
-              }}
-              onMouseUp={(e) => applyPercentile(e.currentTarget.value, true)}
-              onTouchEnd={(e) => applyPercentile(e.currentTarget.value, true)}
-              style={{ width: 120 }}
-            />
-            <input
-              type="number"
-              min={80}
-              max={100}
-              step={0.1}
-              value={frangiPercentile}
-              disabled={!frangiOutUrl}
-              onChange={(e) => {
-                setFrangiPercentile(e.target.value)
-                applyPercentile(e.target.value)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.target.blur() // Enterを押したらフォーカスを外す
-                }
-              }}
-              style={{ width: 70 }}
-            />
+              <span className="controls-label">パーセンタイル</span>
+              <input
+                type="range"
+                min={80}
+                max={100}
+                step={0.1}
+                value={frangiPercentile}
+                onChange={(e) => {
+                  setFrangiPercentile(e.target.value)
+                  applyPercentile(e.target.value)
+                }}
+                onMouseUp={(e) => applyPercentile(e.currentTarget.value, true)}
+                onTouchEnd={(e) => applyPercentile(e.currentTarget.value, true)}
+                style={{ width: 120 }}
+              />
+              <input
+                type="number"
+                min={80}
+                max={100}
+                step={0.1}
+                value={frangiPercentile}
+                onChange={(e) => {
+                  setFrangiPercentile(e.target.value)
+                  applyPercentile(e.target.value)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.target.blur() // Enterを押したらフォーカスを外す
+                  }
+                }}
+                style={{ width: 70 }}
+              />
+            </div>
           </>
         ) : (
           <>
@@ -739,7 +738,7 @@ export default function App() {
           style={{
             width: '140px',
             height: '500px',
-            opacity: method === 'frangi' ? 0.5 : 1,
+            opacity: method === 'frangi' ? 0.4 : 1,
             pointerEvents: method === 'frangi' ? 'none' : 'auto'
           }}
         >
@@ -783,7 +782,7 @@ export default function App() {
           <div
             className="tool-group"
             style={{
-              opacity: penType === 'erase' ? 0.5 : 1,
+              opacity: penType === 'erase' ? 0.4 : 1,
               pointerEvents: penType === 'erase' ? 'none' : 'auto'
             }}
           >
