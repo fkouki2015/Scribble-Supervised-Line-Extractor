@@ -16,10 +16,10 @@
   letter-spacing: 0.01em;
   width: max-content;
   color: var(--color-text-strong);
-  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-danger) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  /* background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-danger) 100%); */
+  /* -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent; */
+  /* background-clip: text; */
 }
 
 /* ===== 生成進捗パネル ===== */
