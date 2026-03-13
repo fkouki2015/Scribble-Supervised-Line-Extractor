@@ -591,6 +591,7 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
         loss = (loss_bce + loss_dice)
         loss.backward()
         opt.step()
+        opt.zero_grad()
         scheduler.step()
         
         if progress_bar is not None:
