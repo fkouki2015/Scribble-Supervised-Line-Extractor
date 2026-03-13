@@ -6,32 +6,23 @@
 事前学習型ではないため、データセットは不要です。
 また、画像フィルタを用いた高速な線画抽出も可能です。
 
-## 開発版セットアップ方法
+## セットアップ方法
+
+### Pythonのダウンロード
+
+Pythonのインストールが必要です。
+Python 3.12で動作確認しています。
 
 ### インストール
 
-```bash
-$ npm install
-$ pip install -r requirements.txt
-```
+setup-ssle.exeを起動してください。
+依存関係が自動でインストールされるため数分かかります。
 
 ### 起動
 
-```bash
-$ npm run dev
-```
+ショートカットに「Scribble-Supervised Line Extractor」が追加されるので、それを起動してください。
 
-### ビルド
-
-```bash
-# WIndows:
-$ npm run build:win
-
-# MacOS:
-$ npm run build:mac
-```
-
-## 使い方
+## アプリの使い方
 
 ### U-Netを用いた方式（低速・高精度）
 
