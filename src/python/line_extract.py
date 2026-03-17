@@ -1,4 +1,5 @@
 import argparse
+from contextlib import nullcontext
 import os
 import cv2
 import numpy as np
@@ -64,19 +65,19 @@ class UNet(nn.Module):
         x3 = self.conv3(x2_pool)
         x3_pool = self.pool3(x3)
         x4 = self.conv4(x3_pool)
-        x4_pool = self.pool4(x4)
-        x5 = self.conv5(x4_pool)    
+        # x4_pool = self.pool4(x4)
+        # x5 = self.conv5(x4_pool)    
         # x5_pool = self.pool5(x5)
         # x6 = self.conv5_1(x5_pool)
         
 
-        y4 = self.up1(x5)
-        if y4.shape[2:] != x4.shape[2:]: # 入力サイズが奇数の場合
-            y4 = F.interpolate(y4, size=x4.shape[2:], mode='bilinear', align_corners=False)
-        y4 = torch.cat([y4, x4], dim=1)
-        y4 = self.conv6(y4)
+        # y4 = self.up1(x5)
+        # if y4.shape[2:] != x4.shape[2:]: # 入力サイズが奇数の場合
+        #     y4 = F.interpolate(y4, size=x4.shape[2:], mode='bilinear', align_corners=False)
+        # y4 = torch.cat([y4, x4], dim=1)
+        # y4 = self.conv6(y4)
 
-        y3 = self.up2(y4)
+        y3 = self.up2(x4)
         if y3.shape[2:] != x3.shape[2:]: # 入力サイズが奇数の場合
             y3 = F.interpolate(y3, size=x3.shape[2:], mode='bilinear', align_corners=False)
         y3 = torch.cat([y3, x3], dim=1)
@@ -555,12 +556,12 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
     labeled[refined_pos_scr] = 1.0
     labeled[bg] = 1.0
 
-    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)  # 1x3xHxW
+    x = torch.from_numpy(img_rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)  # 1xCxHxW
     t = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(device)        # 1x1xHxW
     m = torch.from_numpy(labeled).unsqueeze(0).unsqueeze(0).to(device)       # 1x1xHxW
     # e = torch.from_numpy(edge).unsqueeze(0).unsqueeze(0).to(device)
 
-    model = UNet(in_ch=3, base_ch=32).to(device)
+    model = UNet(in_ch=x.shape[1], base_ch=32).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=lr * 10, total_steps=iters
@@ -581,12 +582,14 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
 
         xb, tb, mb = augment_tensors(x, t, m, aug_prob=0.9)
 
+        with torch.autocast(device_type=device.type, enabled=(device.type == "cuda"), dtype=torch.bfloat16):
+            logits = model(xb)
+            prob = torch.sigmoid(logits)
 
-        logits = model(xb)
-        prob = torch.sigmoid(logits)
-
-        loss_bce = masked_bce_with_logits(logits, tb, mb, pos_weight=pos_weight)
-        loss_dice = masked_dice_loss(prob, tb, mb)
+        loss_bce = masked_bce_with_logits(
+            logits.float(), tb.float(), mb.float(), pos_weight=pos_weight
+        )
+        loss_dice = masked_dice_loss(prob.float(), tb.float(), mb.float())
 
         loss = (loss_bce + loss_dice)
         loss.backward()
@@ -600,7 +603,8 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
         if (it + 1) % 10 == 0 or it == 0:
             model.eval()
             with torch.no_grad():
-                prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+                with torch.autocast(device_type=device.type, enabled=(device.type == "cuda"), dtype=torch.bfloat16):
+                    prob_tmp = torch.sigmoid(model(x)).squeeze().float().cpu().numpy()
             model.train()
             a = prob_tmp[:, :, np.newaxis].astype(np.float32)
             white = np.ones_like(img_u8, dtype=np.float32) * 255.0
@@ -613,7 +617,8 @@ def predict_line(img_u8, scr_u8, refined_scr_u8, lr, iters, device, progress_bar
 
     model.eval()
     with torch.no_grad():
-        prob_tmp = torch.sigmoid(model(x)).squeeze().cpu().numpy()
+        with torch.autocast(device_type=device.type, enabled=(device.type == "cuda"), dtype=torch.bfloat16):
+            prob_tmp = torch.sigmoid(model(x)).squeeze().float().cpu().numpy()
     a = prob_tmp[:, :, np.newaxis].astype(np.float32)
     white = np.ones_like(img_u8, dtype=np.float32) * 255.0
     blended = img_u8.astype(np.float32) * a + white * (1.0 - a)

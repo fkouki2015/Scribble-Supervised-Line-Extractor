@@ -149,11 +149,11 @@ def api_predict_line():
     max_size = int(request.form.get("max_size", 2000))
 
     if torch.cuda.is_available():
-        device = "cuda"
+        device = torch.device("cuda")
     elif torch.backends.mps.is_available():
-        device = "mps"
+        device = torch.device("mps")
     else:
-        device = "cpu"
+        device = torch.device("cpu")
     
     if scr_u8 is None:
         return {"error": "スクリブルがありません．"}, 400
