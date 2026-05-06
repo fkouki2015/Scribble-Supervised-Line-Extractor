@@ -29,7 +29,6 @@ nsis:
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
-  include: build/uninstaller.nsh
 mac:
   identity: null
   entitlementsInherit: build/entitlements.mac.plist
