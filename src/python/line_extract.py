@@ -331,77 +331,6 @@ def masked_dice_loss(prob, targets01, labeled_mask, smooth=1.0):
     dice = (2.0 * inter + smooth) / (denom + smooth)
     return 1.0 - dice
 
-# def masked_focal_with_logits(logits, targets01, labeled_mask, alpha=0.75, gamma=2.0):
-#     bce = F.binary_cross_entropy_with_logits(logits, targets01, reduction="none")
-#     p = torch.sigmoid(logits)
-#     pt = p * targets01 + (1.0 - p) * (1.0 - targets01)
-#     alpha_t = alpha * targets01 + (1.0 - alpha) * (1.0 - targets01)
-#     loss = alpha_t * torch.pow((1.0 - pt).clamp(min=1e-6), gamma) * bce
-#     loss = loss * labeled_mask
-#     denom = labeled_mask.sum().clamp_min(1.0)
-#     return loss.sum() / denom
-
-# def edge_alignment_loss(prob, edge):
-#     """
-#     Encourage prob to be higher where edges exist.
-#     edge: (1,1,H,W) in [0,1]
-#     We use soft penalty: (1-edge)*prob  (prob should be low where no edges)
-#     """
-#     return ((1.0 - edge) * prob).mean()
-
-# def binarize_and_thin(mask01):
-#     """
-#     mask01: uint8 {0,255}
-#     Try thinning (skeletonization) if OpenCV-contrib is available.
-#     Fallback: return as-is.
-#     """
-#     try:
-#         # Requires opencv-contrib-python
-#         th = (mask01 > 0).astype(np.uint8) * 255
-#         thin = cv2.ximgproc.thinning(th, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-#         return thin
-#     except Exception:
-#         return mask01
-
-# def _apply_hysteresis_percentile(response, percentile=99.0, low_percentile=None):
-
-#     valid = np.ones(response.shape, dtype=bool)
-#     resp_vals = response[valid]
-#     if resp_vals.size == 0:
-#         return np.zeros(response.shape, dtype=bool)
-
-#     maxv = float(np.max(resp_vals))
-#     if not np.isfinite(maxv) or maxv <= 1e-8:
-#         return np.zeros(response.shape, dtype=bool)
-
-#     hi_p = float(np.clip(percentile, 0.0, 100.0))
-#     lo_p = max(0.0, hi_p - 2.0) if low_percentile is None else float(np.clip(low_percentile, 0.0, hi_p))
-
-#     thr_hi = float(np.percentile(resp_vals, hi_p))
-#     thr_lo = float(np.percentile(resp_vals, lo_p))
-
-#     eps = 1e-8
-#     seed = (response >= thr_hi) & (response > eps) & valid
-#     grow = (response >= thr_lo) & (response > eps) & valid
-
-#     if not np.any(seed):
-#         return grow
-
-#     grow_u8 = grow.astype(np.uint8) * 255
-#     num, labels = cv2.connectedComponents(grow_u8, connectivity=8)
-#     if num <= 1:
-#         return seed
-
-#     keep = np.zeros(num, dtype=bool)
-#     seed_labels = labels[seed]
-#     if seed_labels.size > 0:
-#         keep[np.unique(seed_labels)] = True
-
-#     out = keep[labels]
-#     out &= valid
-#     return out
-
-
 def compute_frangi_response(img_u8, use_clahe, clahe_clip, clahe_grid, max_size):
     img_u8 = _ensure_bgr_u8(img_u8)
 
@@ -416,102 +345,15 @@ def compute_frangi_response(img_u8, use_clahe, clahe_clip, clahe_grid, max_size)
 
 
 
-# def _shift_with_valid(img_f32, dy, dx):
-#     """Shift image by (dy, dx) with valid mask (no wrap-around).
-
-#     Returns:
-#       shifted: float32 array (same shape)
-#       valid: uint8 {0,1} array indicating pixels with a valid shifted value
-#     """
-#     h, w = img_f32.shape
-#     shifted = np.zeros((h, w), dtype=np.float32)
-#     valid = np.zeros((h, w), dtype=np.uint8)
-
-#     if dy >= 0:
-#         ys_src = slice(0, h - dy)
-#         ys_dst = slice(dy, h)
-#     else:
-#         ys_src = slice(-dy, h)
-#         ys_dst = slice(0, h + dy)
-
-#     if dx >= 0:
-#         xs_src = slice(0, w - dx)
-#         xs_dst = slice(dx, w)
-#     else:
-#         xs_src = slice(-dx, w)
-#         xs_dst = slice(0, w + dx)
-
-#     shifted[ys_dst, xs_dst] = img_f32[ys_src, xs_src]
-#     valid[ys_dst, xs_dst] = 1
-#     return shifted, valid
-
-
-# def _keep_two_sided_contrast(gray_u8, candidate_mask, *, delta=8.0, distances=(1, 2)):
-#     """Reject edge-like candidates where intensity changes only on one side.
-
-#     We keep a candidate pixel if there exists a direction where both sides
-#     (along that direction) are brighter than the center by at least `delta`.
-
-#     Args:
-#       gray_u8: grayscale uint8 image
-#       candidate_mask: boolean mask of Frangi candidates
-#       delta: minimum per-side intensity difference in uint8 units
-#       distances: sample distances (in pixels) to average on each side
-#     """
-#     if candidate_mask is None or not np.any(candidate_mask):
-#         return candidate_mask
-
-#     g = gray_u8.astype(np.float32)
-#     c = g
-#     delta_f = float(delta)
-
-#     directions = ((1, 0), (0, 1), (1, 1), (1, -1))
-#     keep_any = np.zeros_like(candidate_mask, dtype=bool)
-
-#     for dx, dy in directions:
-#         sum_pos = np.zeros_like(g, dtype=np.float32)
-#         cnt_pos = np.zeros_like(g, dtype=np.uint8)
-#         sum_neg = np.zeros_like(g, dtype=np.float32)
-#         cnt_neg = np.zeros_like(g, dtype=np.uint8)
-
-#         for dist in distances:
-#             sp, vp = _shift_with_valid(g, dy * int(dist), dx * int(dist))
-#             sn, vn = _shift_with_valid(g, -dy * int(dist), -dx * int(dist))
-#             sum_pos += sp
-#             cnt_pos += vp
-#             sum_neg += sn
-#             cnt_neg += vn
-
-#         valid = (cnt_pos > 0) & (cnt_neg > 0)
-#         pos_mean = sum_pos / np.maximum(cnt_pos.astype(np.float32), 1.0)
-#         neg_mean = sum_neg / np.maximum(cnt_neg.astype(np.float32), 1.0)
-
-#         # Two-sided contrast for dark ridges: both sides brighter than center.
-#         cond = valid & ((pos_mean - c) > delta_f) & ((neg_mean - c) > delta_f)
-#         keep_any |= cond
-
-#     return candidate_mask & keep_any
-
 
 
 def apply_frangi_percentile(frangi_u8, percentile, img_u8, *, two_sided_delta=8.0):
     img_u8 = _ensure_bgr_u8(img_u8)
 
     response = frangi_u8.astype(np.float64) / 255.0
-    # Temporarily disabled: hysteresis percentile filtering
-    # pos_mask = _apply_hysteresis_percentile(response, float(percentile))
     thr = float(np.percentile(response, float(np.clip(percentile, 0.0, 100.0))))
     pos_mask = response >= thr
 
-    # Temporarily disabled: two-sided contrast filtering
-    # if img_path is not None and os.path.exists(str(img_path)):
-    #     img_bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-    #     if img_bgr is not None:
-    #         gray_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    #         pos_mask = _keep_two_sided_contrast(gray_u8, pos_mask, delta=float(two_sided_delta))
-
-    # refined_bgr = (pos_mask.astype(np.uint8) * 255)
-    # refined_bgr = cv2.LUT(refined_bgr, 255 - np.arange(256)).astype(np.uint8)
     a = pos_mask[:, :, np.newaxis].astype(np.float32)
     white = np.ones_like(img_u8, dtype=np.float32) * 255.0
     blended = img_u8.astype(np.float32) * a + white * (1.0 - a)
